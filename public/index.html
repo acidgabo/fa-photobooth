@@ -1,0 +1,517 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PhotoBooth Demo</title>
+    <style>
+        /* Diseño basado en el mockup de referencia (photoboothdemo 3.html).
+           La diferencia es que aquí las transiciones NO son simuladas con
+           goToScreen() a mano: las dispara el estado real del backend vía
+           polling a /api/session/status. */
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #1a1a1a;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            padding: clamp(10px, 3vw, 20px);
+            user-select: none;
+            -webkit-user-select: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        .kiosk-frame {
+            width: 100%;
+            max-width: 1600px;
+            min-height: min(900px, 94vh);
+            background: linear-gradient(135deg, #c9b89d 0%, #d4c4b0 100%);
+            border: clamp(4px, 0.6vw, 10px) solid #333;
+            border-radius: 16px;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.4);
+            position: relative;
+        }
+
+        .screen {
+            flex: 1;
+            display: none;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            padding: clamp(28px, 3.2vw, 64px) clamp(28px, 3.2vw, 64px) clamp(70px, 8vw, 160px) clamp(28px, 3.2vw, 64px);
+            text-align: center;
+            animation: fadeIn 0.4s ease-in-out;
+            gap: clamp(14px, 1.6vw, 32px);
+        }
+
+        .screen.active { display: flex; }
+
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+        .screen h1 {
+            font-size: clamp(32px, 4.5vw, 84px);
+            font-style: italic;
+            color: #3d2817;
+            letter-spacing: 2px;
+            margin: 0;
+        }
+
+        .screen h2 {
+            font-size: clamp(26px, 3.4vw, 56px);
+            font-style: italic;
+            color: #3d2817;
+            letter-spacing: 1px;
+            margin: 0;
+        }
+
+        .subtitle {
+            font-size: clamp(16px, 1.8vw, 28px);
+            color: #5a4a3a;
+            font-style: italic;
+            margin: 0;
+        }
+
+        .icon {
+            font-size: clamp(60px, 8vw, 140px);
+            animation: pulse 2s ease-in-out infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.8; transform: scale(1.05); }
+        }
+
+        .packages {
+            display: flex;
+            gap: clamp(20px, 2.6vw, 48px);
+            justify-content: center;
+            width: 100%;
+            flex-wrap: wrap;
+        }
+
+        .package {
+            background: rgba(255, 255, 255, 0.7);
+            padding: clamp(20px, 2.6vw, 48px);
+            border-radius: 12px;
+            min-width: clamp(160px, 18vw, 320px);
+            cursor: pointer;
+            transition: all 0.3s ease;
+            border: 2px solid transparent;
+        }
+
+        .package:hover {
+            background: rgba(255, 255, 255, 0.9);
+            border-color: #8b7355;
+            transform: translateY(-5px);
+        }
+
+        .package h3 {
+            font-size: clamp(15px, 1.5vw, 22px);
+            color: #3d2817;
+            margin-bottom: 10px;
+            font-weight: 600;
+        }
+
+        .package .price {
+            font-size: clamp(28px, 3.2vw, 54px);
+            color: #3d2817;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+
+        .package .details {
+            font-size: clamp(13px, 1.3vw, 20px);
+            color: #5a4a3a;
+        }
+
+        .button-group {
+            display: flex;
+            gap: clamp(14px, 1.6vw, 24px);
+            justify-content: center;
+            flex-wrap: wrap;
+            width: 100%;
+        }
+
+        button {
+            background: rgba(255, 255, 255, 0.8);
+            border: 2px solid #8b7355;
+            padding: clamp(12px, 1.4vw, 22px) clamp(20px, 2.6vw, 44px);
+            border-radius: 8px;
+            font-size: clamp(15px, 1.5vw, 22px);
+            color: #3d2817;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-weight: 600;
+            white-space: nowrap;
+        }
+
+        button:hover {
+            background: rgba(255, 255, 255, 1);
+            border-color: #3d2817;
+            transform: scale(1.05);
+        }
+
+        button:active { transform: scale(0.98); }
+        button:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+
+        .button-back {
+            background: #d4c4b0;
+            border-color: #8b7355;
+            color: #3d2817;
+        }
+
+        .button-error {
+            background: rgba(255, 200, 200, 0.8);
+            border-color: #c44;
+        }
+
+        .loading-spinner {
+            width: clamp(50px, 6vw, 100px);
+            height: clamp(50px, 6vw, 100px);
+            border: 4px solid rgba(61, 40, 23, 0.2);
+            border-top: 4px solid #3d2817;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        .payment-info {
+            background: rgba(255, 255, 255, 0.7);
+            padding: clamp(14px, 1.6vw, 24px) clamp(20px, 2.4vw, 36px);
+            border-radius: 8px;
+            font-size: clamp(14px, 1.3vw, 20px);
+            color: #3d2817;
+            margin: 0;
+            max-width: 90%;
+        }
+
+        .status-message {
+            background: rgba(255, 255, 255, 0.7);
+            padding: clamp(14px, 1.6vw, 24px) clamp(20px, 2.4vw, 36px);
+            border-radius: 8px;
+            font-size: clamp(14px, 1.3vw, 20px);
+            color: #3d2817;
+            margin: 0;
+            max-width: 90%;
+        }
+
+        .checkmark {
+            font-size: clamp(50px, 6vw, 100px);
+            color: #2d7a4a;
+            animation: checkBounce 0.6s ease-out;
+        }
+
+        @keyframes checkBounce {
+            0% { transform: scale(0) rotate(0deg); }
+            50% { transform: scale(1.2) rotate(10deg); }
+            100% { transform: scale(1) rotate(0deg); }
+        }
+
+        .error-triangle {
+            font-size: clamp(60px, 7vw, 120px);
+            color: #a83a3a;
+        }
+
+        .progress-dots {
+            position: absolute;
+            bottom: clamp(16px, 1.8vw, 28px);
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: clamp(8px, 1vw, 14px);
+        }
+
+        .dot {
+            width: clamp(10px, 1vw, 16px);
+            height: clamp(10px, 1vw, 16px);
+            border-radius: 50%;
+            background: rgba(61, 40, 23, 0.3);
+            transition: background 0.3s ease;
+        }
+
+        .dot.active { background: #3d2817; }
+    </style>
+</head>
+<body>
+    <div class="kiosk-frame">
+        <!-- Screen 1: Inicio -->
+        <div class="screen active" data-screen="1">
+            <h1>PHOTO BOOTH</h1>
+            <p class="subtitle">Captura tus recuerdos</p>
+            <div class="icon">📷</div>
+            <button onclick="goToScreen(2)">TOCA PARA INICIAR</button>
+        </div>
+
+        <!-- Screen 2: Seleccionar paquete (tarjetas generadas desde GET /api/packages) -->
+        <div class="screen" data-screen="2">
+            <h2>ELIGE TU PAQUETE</h2>
+            <div class="packages" id="packages"></div>
+            <button class="button-back" onclick="goToScreen(1)">← Atrás</button>
+        </div>
+
+        <!-- Screen 3: Procesando pago -->
+        <div class="screen" data-screen="3">
+            <h2>PROCESANDO PAGO</h2>
+            <p id="packageSelected" class="payment-info"></p>
+            <div class="loading-spinner"></div>
+            <p class="status-message">Acerca o inserta tu tarjeta en la terminal</p>
+            <div class="button-group">
+                <button id="btnSimOk" onclick="simulate(true)">✓ Simular aprobación</button>
+                <button id="btnSimErr" class="button-error" onclick="simulate(false)">✗ Simular error</button>
+            </div>
+        </div>
+
+        <!-- Screen 4: Éxito / sesión de fotos en curso -->
+        <div class="screen" data-screen="4">
+            <h1>¡ÉXITO!</h1>
+            <div class="checkmark">✓</div>
+            <div class="loading-spinner" id="successSpinner"></div>
+            <p class="status-message" id="boothStatus">Iniciando sesión de fotos...</p>
+        </div>
+
+        <!-- Screen 5: Error -->
+        <div class="screen" data-screen="5">
+            <h1>ERROR</h1>
+            <div class="error-triangle">⚠</div>
+            <p class="status-message" id="errorMessage">No se pudo procesar el pago<br>verifica tu tarjeta e intenta de nuevo</p>
+            <div class="button-group">
+                <button onclick="retryPayment()">← Reintentar</button>
+                <button onclick="backToStart()">Inicio</button>
+            </div>
+        </div>
+
+        <!-- Progress dots -->
+        <div class="progress-dots">
+            <div class="dot active" data-dot="1"></div>
+            <div class="dot" data-dot="2"></div>
+            <div class="dot" data-dot="3"></div>
+            <div class="dot" data-dot="4"></div>
+        </div>
+    </div>
+
+    <script>
+        /* ============================================================
+           A diferencia del mockup, aquí cada pantalla avanza por el
+           ESTADO REAL del backend (polling a /api/session/status):
+             screen 3 <- awaiting_payment
+             screen 4 <- payment_confirmed / booth_running (+ eventos)
+             screen 5 <- error
+             screen 1 <- idle (cuando la sesión de fotos terminó)
+           Los botones "Simular aprobación/error" mandan el webhook que
+           en producción mandaría NetPay — son la "terminal simulada".
+        ============================================================ */
+        const POLL_INTERVAL_MS = 1000;
+
+        const BOOTH_MESSAGES = {
+            session_start: 'Preparando tu sesión…',
+            countdown_start: 'Prepárate… ¡mira a la cámara!',
+            countdown: 'Prepárate… ¡mira a la cámara!',
+            capture_start: '¡Sonríe! 📸',
+            file_download: 'Procesando tu foto…',
+            processing_start: 'Aplicando los últimos detalles…',
+            printing: 'Imprimiendo tu foto… 🖨️',
+            session_end: '¡Listo! Toma tu foto',
+        };
+
+        let currentScreen = 1;
+        let currentPackage = null;   // objeto del catálogo del backend
+        let currentOrderId = null;
+        let pollTimer = null;
+        let paymentTimeoutTimer = null;  // 30s sin respuesta → error automático
+        let packagesCache = [];
+
+        const PAYMENT_TIMEOUT_MS = 30000;
+
+        async function api(path, options) {
+            const res = await fetch(path, options);
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.error || 'Error ' + res.status);
+            return data;
+        }
+
+        function goToScreen(screenNum) {
+            currentScreen = screenNum;
+            document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+            document.querySelector('[data-screen="' + screenNum + '"]').classList.add('active');
+
+            // dots: el 5 (error) no tiene dot propio, se queda en el paso 3
+            const dotStep = screenNum === 5 ? 3 : Math.min(screenNum, 4);
+            document.querySelectorAll('.dot').forEach(dot => {
+                dot.classList.toggle('active', parseInt(dot.dataset.dot) <= dotStep);
+            });
+        }
+
+        // --- Pantalla 2: catálogo desde el backend --------------------
+
+        async function loadPackages() {
+            const el = document.getElementById('packages');
+            try {
+                packagesCache = await api('/api/packages');
+            } catch (err) {
+                el.innerHTML = '<p class="status-message">No se pudo cargar el catálogo: ' + err.message + '</p>';
+                return;
+            }
+            el.innerHTML = packagesCache.map(p =>
+                '<div class="package" onclick="selectPackage(\'' + p.id + '\')">' +
+                    '<h3>' + p.name + '</h3>' +
+                    '<div class="price">$' + p.price + ' MXN</div>' +
+                    '<div class="details">Collage ' + p.photos + ' fotos</div>' +
+                '</div>'
+            ).join('');
+        }
+
+        // --- Pago -----------------------------------------------------
+
+        async function selectPackage(packageId) {
+            currentPackage = packagesCache.find(p => p.id === packageId);
+            if (!currentPackage) return;
+
+            document.getElementById('packageSelected').textContent =
+                currentPackage.name + ' - $' + currentPackage.price + ' MXN - ' + currentPackage.photos + ' fotos';
+
+            try {
+                const result = await api('/api/pay', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ packageId: packageId }),
+                });
+                currentOrderId = result.orderId;
+                goToScreen(3);
+                startPolling();
+                startPaymentTimeout(); // 30s sin respuesta → timeout automático
+            } catch (err) {
+                showError(err.message);
+            }
+        }
+
+        async function retryPayment() {
+            try { await api('/api/session/reset', { method: 'POST' }); } catch (_) {}
+            if (currentPackage) {
+                selectPackage(currentPackage.id);
+            } else {
+                goToScreen(2);
+            }
+        }
+
+        async function backToStart() {
+            stopPolling();
+            try { await api('/api/session/reset', { method: 'POST' }); } catch (_) {}
+            goToScreen(1);
+        }
+
+        // --- Terminal simulada ----------------------------------------
+        // En producción este POST lo hace NetPay desde su nube. Aquí lo
+        // dispara el botón, mandando el mismo webhook al backend. (Si el
+        // mock de NetPay está corriendo en modo success, él solo confirma
+        // a los ~3s — estos botones son para adelantarse o forzar error.)
+
+        async function simulate(success, errorCode) {
+            if (!currentOrderId) return;
+            clearPaymentTimeout(); // el usuario respondió antes del timeout
+            document.getElementById('btnSimOk').disabled = true;
+            document.getElementById('btnSimErr').disabled = true;
+            try {
+                await api('/webhooks/netpay', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        orderId: currentOrderId,
+                        success: success,
+                        errorCode: errorCode || (success ? null : 'card_declined'),
+                    }),
+                });
+            } catch (_) { /* el polling reporta el resultado */ }
+            document.getElementById('btnSimOk').disabled = false;
+            document.getElementById('btnSimErr').disabled = false;
+        }
+
+        // --- Polling: el estado del backend decide la pantalla --------
+
+        function startPolling() {
+            stopPolling();
+            pollTimer = setInterval(async () => {
+                let state;
+                try {
+                    state = await api('/api/session/status');
+                } catch (_) {
+                    return; // error de red pasajero
+                }
+
+                if (state.status === 'error') {
+                    const errorMessages = {
+                        payment_timeout: 'La terminal no respondió a tiempo.<br>Intenta de nuevo.',
+                        card_declined:   'Pago rechazado.<br>Verifica tu tarjeta e intenta de nuevo.',
+                        pago_rechazado:  'Pago rechazado.<br>Verifica tu tarjeta e intenta de nuevo.',
+                    };
+                    showError(errorMessages[state.error] || state.error || 'No se pudo procesar el pago');
+                    return;
+                }
+
+                if (state.status === 'awaiting_payment') {
+                    if (currentScreen !== 3) goToScreen(3);
+                    return;
+                }
+
+                if (state.status === 'payment_confirmed' || state.status === 'booth_running') {
+                    if (currentScreen !== 4) goToScreen(4);
+                    updateBoothStatus(state);
+                    return;
+                }
+
+                if (state.status === 'idle') {
+                    // La sesión de fotos terminó (o se reseteó): volver al inicio
+                    if (currentScreen === 4 || currentScreen === 3) {
+                        stopPolling();
+                        goToScreen(1);
+                    }
+                }
+            }, POLL_INTERVAL_MS);
+        }
+
+        function stopPolling() {
+            if (pollTimer) clearInterval(pollTimer);
+            pollTimer = null;
+            clearPaymentTimeout();
+        }
+
+        function startPaymentTimeout() {
+            clearPaymentTimeout();
+            paymentTimeoutTimer = setTimeout(() => {
+                // Solo actuar si todavía estamos esperando el pago
+                if (currentScreen === 3 && currentOrderId) {
+                    simulate(false, 'payment_timeout');
+                }
+            }, PAYMENT_TIMEOUT_MS);
+        }
+
+        function clearPaymentTimeout() {
+            if (paymentTimeoutTimer) clearTimeout(paymentTimeoutTimer);
+            paymentTimeoutTimer = null;
+        }
+
+        function updateBoothStatus(state) {
+            const el = document.getElementById('boothStatus');
+            const spinner = document.getElementById('successSpinner');
+            const eventType = state.lastEvent && state.lastEvent.eventType;
+            el.textContent = BOOTH_MESSAGES[eventType] || 'Iniciando sesión de fotos...';
+            spinner.style.display = eventType === 'session_end' ? 'none' : '';
+        }
+
+        function showError(message) {
+            stopPolling();
+            document.getElementById('errorMessage').innerHTML =
+                (message || 'No se pudo procesar el pago') + '<br>verifica tu tarjeta e intenta de nuevo';
+            goToScreen(5);
+        }
+
+        loadPackages();
+    </script>
+</body>
+</html>

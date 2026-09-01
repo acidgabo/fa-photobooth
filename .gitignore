@@ -1,0 +1,17 @@
+# Dependencias
+node_modules/
+
+# Variables de entorno reales (credenciales de NetPay, rutas de la máquina, etc.)
+# — .env.example sí se sube, .env NUNCA.
+.env
+
+# Fotos capturadas en modo direct/windirect (contenido generado en runtime)
+captures/
+
+# Logs
+npm-debug.log*
+*.log
+
+# Sistema operativo
+.DS_Store
+Thumbs.db
