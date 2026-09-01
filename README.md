@@ -1,0 +1,2 @@
+# fa-photobooth
+Photobooth server
