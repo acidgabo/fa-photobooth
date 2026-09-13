@@ -5,6 +5,7 @@ const sessionState = require('../sessionState');
 const dslrboothService = require('../services/dslrboothService');
 const directBoothService = require('../services/directBoothService');
 const windirectBoothService = require('../services/windirectBoothService');
+const windowFocusService = require('../services/windowFocusService');
 
 // NetPay pega aquí cuando confirma (o rechaza) el cobro.
 // TODO: cuando tengamos la doc de autorización de webhooks de NetPay,
@@ -50,13 +51,23 @@ router.post('/netpay', async (req, res) => {
     // Modo demo (Windows): cámara/impresora reales, controladas por este
     // backend vía digiCamControl + impresión nativa de Windows. Mismo
     // patrón que 'direct' pero para cuando la demo con hardware corre en
-    // el NUC/PC Windows antes de tener dslrBooth instalado.
+    // la laptop Windows antes de tener dslrBooth instalado.
     sessionState.set({ status: 'booth_running' });
     windirectBoothService.runDirectSession().catch((err) => {
       sessionState.set({ status: 'error', error: `booth directo (Windows): ${err.message}` });
     });
   } else {
     try {
+      // Convivencia de pantallas (ver "Convivencia visual/de foco..." en
+      // claude/Integración dslrbooth.md): antes de disparar la sesión,
+      // LumaBooth debe recuperar el primer plano. Primero se le quita su
+      // propia pantalla de bloqueo (API confiable) y luego se intenta el
+      // cambio de foco a nivel de SO (best-effort). Ninguna de las dos
+      // llamadas tira error — son hardening, no deben romper el flujo si
+      // fallan (ver dslrboothService.js / windowFocusService.js).
+      await dslrboothService.tryExitLockscreen();
+      await windowFocusService.tryFocusDslrbooth();
+
       await dslrboothService.startSession({ mode: 'print' });
       sessionState.set({ status: 'booth_running' });
     } catch (err) {

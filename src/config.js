@@ -22,8 +22,8 @@ module.exports = {
 
   // 'dslrbooth' = llama al API de dslrBooth (lo definitivo, Windows).
   // 'direct'    = controla cámara (gphoto2) e impresora (CUPS) directo en
-  //               LINUX, SOLO para demo temporal mientras no hay NUC con
-  //               dslrBooth (usa directBoothService.js).
+  //               LINUX, SOLO para demo temporal mientras no hay laptop
+  //               Windows con dslrBooth (usa directBoothService.js).
   // 'windirect' = controla cámara (digiCamControl) e impresora (Windows)
   //               directo en WINDOWS, SOLO para demo con hardware real
   //               antes de instalar dslrBooth (usa windirectBoothService.js).
@@ -69,5 +69,25 @@ module.exports = {
     // Pausa entre copias al imprimir con mspaint /pt (no soporta un
     // parámetro nativo de "número de copias").
     printCopiesDelayMs: parseInt(process.env.WINDOWS_PRINT_COPY_DELAY_MS || '2000', 10),
+  },
+
+  // Convivencia visual/de foco entre el navegador del kiosco y la ventana
+  // de LumaBooth (dslrBooth) — solo aplica con BOOTH_MODE=dslrbooth. Ver
+  // "Convivencia visual/de foco..." en claude/Integración dslrbooth.md
+  // (doc del proyecto) para el diseño completo. El swap de foco a nivel de
+  // Windows es best-effort (ver src/services/windowFocusService.js) —
+  // Windows a veces bloquea el robo de foco a una app en pantalla completa,
+  // por eso nunca debe poder romper el flujo de pago/sesión si falla.
+  kiosk: {
+    // Apagar por completo el swap de foco (no el lockscreen, que es
+    // independiente) mientras se prueba en hardware real.
+    windowFocusEnabled: (process.env.KIOSK_WINDOW_FOCUS_ENABLED || 'true') === 'true',
+    // Nombre EXACTO del proceso (sin ".exe"), tal como aparece en
+    // `Get-Process` en la máquina Windows real — confirmar ahí, puede ser
+    // "dslrBooth" o "LumaBooth" según cómo se llame el .exe instalado.
+    dslrboothProcessName: process.env.KIOSK_DSLRBOOTH_PROCESS_NAME || 'dslrBooth',
+    // Nombre del proceso del navegador corriendo en modo kiosco
+    // (p.ej. "chrome", "msedge") — confirmar también con `Get-Process`.
+    browserProcessName: process.env.KIOSK_BROWSER_PROCESS_NAME || 'chrome',
   },
 };
