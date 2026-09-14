@@ -387,7 +387,7 @@
                 startPolling();
                 startPaymentTimeout(); // 30s sin respuesta → timeout automático
             } catch (err) {
-                showError(err.message);
+                showError((err.message || 'No se pudo procesar el pago') + '<br>verifica tu tarjeta e intenta de nuevo');
             }
         }
 
@@ -449,8 +449,18 @@
                         payment_timeout: 'La terminal no respondió a tiempo.<br>Intenta de nuevo.',
                         card_declined:   'Pago rechazado.<br>Verifica tu tarjeta e intenta de nuevo.',
                         pago_rechazado:  'Pago rechazado.<br>Verifica tu tarjeta e intenta de nuevo.',
+                        // Watchdog del backend: la sesión de fotos se quedó sin avance
+                        // (dslrBooth dejó de mandar eventos a medio camino). No es un
+                        // error de pago — el cliente ya pagó — así que el mensaje no
+                        // menciona la tarjeta.
+                        booth_timeout:   'La cabina tardó demasiado en responder.<br>Toca para reintentar tu sesión de fotos.',
                     };
-                    showError(errorMessages[state.error] || state.error || 'No se pudo procesar el pago');
+                    showError(
+                        errorMessages[state.error] ||
+                        (state.error
+                            ? state.error
+                            : 'No se pudo procesar el pago<br>verifica tu tarjeta e intenta de nuevo')
+                    );
                     return;
                 }
 
@@ -504,10 +514,15 @@
             spinner.style.display = eventType === 'session_end' ? 'none' : '';
         }
 
+        // Cada llamador manda el mensaje ya completo (incluyendo el <br> con
+        // la instrucción de qué hacer) — showError ya no le pega un sufijo
+        // fijo de "verifica tu tarjeta", porque no todos los errores son de
+        // pago (p.ej. booth_timeout es un problema de la cabina, no de la
+        // tarjeta del cliente).
         function showError(message) {
             stopPolling();
             document.getElementById('errorMessage').innerHTML =
-                (message || 'No se pudo procesar el pago') + '<br>verifica tu tarjeta e intenta de nuevo';
+                message || 'No se pudo procesar el pago<br>verifica tu tarjeta e intenta de nuevo';
             goToScreen(5);
         }
 

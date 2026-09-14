@@ -3,6 +3,28 @@ require('dotenv').config();
 module.exports = {
   port: process.env.PORT || 4000,
 
+  // Watchdog de sesión (ver src/sessionState.js): red de seguridad del lado
+  // del backend para los dos estados en los que la sesión puede quedarse
+  // colgada indefinidamente si el otro lado (NetPay o dslrBooth) nunca
+  // avisa. El frontend YA tiene su propio timeout de pago (30s, ver
+  // public/index.html) pero es best-effort del navegador — si el kiosco se
+  // recarga, el JS truena, o alguien cierra la pestaña, ese timer se pierde
+  // y el backend se quedaría esperando para siempre sin esto. Este watchdog
+  // es la autoridad real, independiente del frontend.
+  watchdog: {
+    // Cuánto esperar en 'awaiting_payment' sin que llegue el webhook de
+    // NetPay. Deliberadamente más largo que el timeout de 30s del frontend
+    // — no debe competir con él en operación normal, solo debe rescatar la
+    // sesión si el frontend nunca llegó a intentarlo.
+    paymentTimeoutMs: parseInt(process.env.PAYMENT_TIMEOUT_MS || '180000', 10),
+    // Cuánto esperar en 'booth_running' SIN NINGÚN evento nuevo de dslrBooth
+    // (se reinicia con cada evento que llega — countdown, capture_start,
+    // printing, etc. — así que esto detecta un cuelgue real a medio camino,
+    // no solo la ausencia del session_end final). 2 minutos da margen de
+    // sobra para el paso más lento normal (impresión en la DNP DS-RX1).
+    boothTimeoutMs: parseInt(process.env.BOOTH_TIMEOUT_MS || '120000', 10),
+  },
+
   netpay: {
     baseUrl: process.env.NETPAY_BASE_URL || 'https://sandbox.netpay.com.mx',
     username: process.env.NETPAY_USERNAME || '',
