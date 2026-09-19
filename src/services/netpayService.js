@@ -7,15 +7,18 @@ let cachedToken = null;
 let cachedTokenExpiresAt = 0;
 
 /**
- * IMPORTANTE: la forma exacta del body/response de /oauth/token todavía no
- * está confirmada contra el sandbox real (no tenemos cuenta de desarrollador
- * todavía). Esta implementación sigue lo que dice la doc de API Reference,
- * pero hay que RE-VALIDAR en cuanto lleguen las credenciales — puede que
- * cambien nombres de campo o headers exactos.
+ * Confirmado contra el correo de Integraciones de Netpay (Terminales Smart
+ * API) y la Referencia API oficial:
+ * - Endpoint: POST {baseUrl}/oauth-service/oauth/token (NO "/oauth/token").
+ * - Header: Authorization: Basic {NETPAY_AUTH_STRING} — credenciales FIJAS
+ *   de la app ("trusted-app:secret" en base64), distintas de username/password.
+ * - Body: application/x-www-form-urlencoded con grant_type, username,
+ *   password (las credenciales de comercio: NETPAY_USERNAME/PASSWORD) — NO
+ *   JSON, que es lo que axios manda por default con un objeto plano.
  *
  * Mientras tanto, config.netpay.baseUrl puede apuntar a mocks/mock-netpay.js
- * (ver .env: NETPAY_BASE_URL=http://localhost:5001) para probar todo el
- * flujo de código sin depender del sandbox real.
+ * para probar todo el flujo de código sin depender del sandbox real (el
+ * mock no valida content-type, así que esto también sigue funcionando ahí).
  */
 async function getAccessToken() {
   const now = Date.now();
@@ -23,12 +26,17 @@ async function getAccessToken() {
     return cachedToken;
   }
 
-  const response = await axios.post(`${config.netpay.baseUrl}/oauth/token`, {
+  const body = new URLSearchParams({
     grant_type: config.netpay.grantType,
     username: config.netpay.username,
     password: config.netpay.password,
-  }, {
-    headers: { Authorization: `Basic ${config.netpay.authString}` },
+  });
+
+  const response = await axios.post(`${config.netpay.baseUrl}/oauth-service/oauth/token`, body, {
+    headers: {
+      Authorization: `Basic ${config.netpay.authString}`,
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
     timeout: 5000, // sin esto, una URL mal configurada o caída se cuelga en silencio
   });
 
@@ -39,21 +47,35 @@ async function getAccessToken() {
 
 /**
  * Inicia un cobro en la terminal A910.
- * TODO: confirmar el shape exacto del body/response contra la guía de
- * "Realizando una venta" una vez tengamos acceso al sandbox real.
+ * Confirmado contra la Referencia API (sección "5. Venta"):
+ * - Endpoint: sin el prefijo "/gateway" que tenía antes.
+ * - "folioNumber" es obligatorio — es NUESTRO identificador de referencia
+ *   (reutilizamos el mismo orderId que ya trackeamos en sessionState).
+ *   "orderId" en sí NO es un campo del request: lo genera y regresa la
+ *   propia terminal en su respuesta (distinto a nuestro orderId interno).
+ * - "traceability" también es obligatorio según la tabla de parámetros
+ *   (puede ir como objeto vacío si no necesitamos mandar nada extra).
+ *
+ * Timeout de 20s (no 5s como en getAccessToken): esta llamada empuja un
+ * cobro a un dispositivo físico (la terminal), no solo pega contra un
+ * servicio en la nube — confirmado en pruebas reales que un timeout de 5s
+ * es demasiado ajustado y produce "timeout of 5000ms exceeded" en
+ * situaciones donde la terminal tarda en confirmar que recibió el push
+ * (p. ej. si venía de mostrar el ticket de una transacción anterior).
  */
 async function createSale({ amount, orderId }) {
   const token = await getAccessToken();
 
   const response = await axios.post(
-    `${config.netpay.baseUrl}/gateway/integration-service/transactions/sale`,
+    `${config.netpay.baseUrl}/integration-service/transactions/sale`,
     {
       serialNumber: config.netpay.serialNumber,
       storeId: config.netpay.storeId,
       amount,
-      orderId,
+      folioNumber: orderId,
+      traceability: {},
     },
-    { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, timeout: 5000 }
+    { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, timeout: 20000 }
   );
 
   return response.data;
@@ -61,13 +83,13 @@ async function createSale({ amount, orderId }) {
 
 async function cancelSale({ orderId }) {
   const token = await getAccessToken();
-  // --- STUB: POST /gateway/integration-service/transactions/cancel ---
+  // --- STUB: POST /integration-service/transactions/cancel ---
   throw new Error('NetPay: cancelSale() no implementado todavía');
 }
 
 async function reprintTicket({ orderId }) {
   const token = await getAccessToken();
-  // --- STUB: POST /gateway/integration-service/transactions/reprint ---
+  // --- STUB: POST /integration-service/transactions/reprint ---
   throw new Error('NetPay: reprintTicket() no implementado todavía');
 }
 
