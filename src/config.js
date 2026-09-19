@@ -39,6 +39,18 @@ module.exports = {
     // mientras se sigue validando la integración contra la terminal real.
     // Debe quedar en false (o sin definir) en producción.
     debugLog: process.env.NETPAY_DEBUG_LOG === 'true',
+    // true cuando NETPAY_BASE_URL apunta al mock local
+    // (mocks/mock-netpay.js, por default http://localhost:5001) en vez de
+    // al sandbox/producción real de NetPay. El frontend lo lee vía
+    // GET /api/config para decidir si corre su propio timeout local de
+    // 30s — ver "Timer de 30s" en Bitacora_Pruebas_Netpay_dslrBooth.md:
+    // contra terminal real ese timer mandaba un webhook fantasma que
+    // siempre se ignoraba en silencio, y combinado con un doble tap o un
+    // reload dejaba cobros huérfanos. Contra terminal real basta con el
+    // watchdog de arriba.
+    isMock: /^https?:\/\/(localhost|127\.0\.0\.1)/i.test(
+      process.env.NETPAY_BASE_URL || 'https://sandbox.netpay.com.mx'
+    ),
   },
 
   dslrbooth: {

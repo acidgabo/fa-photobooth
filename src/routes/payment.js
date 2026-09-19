@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const config = require('../config');
 const netpayService = require('../services/netpayService');
 const sessionState = require('../sessionState');
 const packages = require('../packages');
@@ -10,6 +11,17 @@ const packages = require('../packages');
 // (src/packages.js).
 router.get('/packages', (req, res) => {
   res.json(packages.getAll());
+});
+
+// El frontend consulta esto una sola vez al cargar, para decidir si corre
+// su propio timeout local de 30s (ver public/index.html, PAYMENT_TIMEOUT_MS)
+// — solo tiene sentido en modo mock. Contra terminal real, el watchdog del
+// backend (config.watchdog, ver sessionState.js) ya es la autoridad real e
+// independiente del frontend; el timer local de 30s del navegador era lo
+// que causaba los cobros huérfanos documentados en
+// Bitacora_Pruebas_Netpay_dslrBooth.md.
+router.get('/config', (req, res) => {
+  res.json({ paymentMock: config.netpay.isMock });
 });
 
 // El frontend llama esto cuando el usuario elige un paquete y toca "Pagar".

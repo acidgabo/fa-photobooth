@@ -1,4 +1,6 @@
 const express = require('express');
+const fs = require('fs');
+const path = require('path');
 const router = express.Router();
 const config = require('../config');
 const sessionState = require('../sessionState');
@@ -6,6 +8,24 @@ const dslrboothService = require('../services/dslrboothService');
 const directBoothService = require('../services/directBoothService');
 const windirectBoothService = require('../services/windirectBoothService');
 const windowFocusService = require('../services/windowFocusService');
+
+// Registro en archivo aparte de los cobros huérfanos (ver COBRO HUÉRFANO más
+// abajo) — para que quede constancia aunque nadie esté viendo la consola en
+// el momento que pasa. "*.log" ya está en .gitignore, así que este archivo
+// nunca se sube al repo (son datos operativos/sensibles, no código).
+const ORPHAN_LOG_PATH = path.join(__dirname, '..', '..', 'logs', 'cobros-huerfanos.log');
+
+function logOrphanCharge(detail) {
+  try {
+    fs.mkdirSync(path.dirname(ORPHAN_LOG_PATH), { recursive: true });
+    fs.appendFileSync(ORPHAN_LOG_PATH, `${new Date().toISOString()} ${detail}\n`);
+  } catch (err) {
+    // No debe tumbar el manejo del webhook si falla la escritura a disco
+    // (permisos, disco lleno, etc.) — el console.error de todas formas ya
+    // corrió antes de llegar aquí.
+    console.error(`[webhook] no se pudo escribir en ${ORPHAN_LOG_PATH}: ${err.message}`);
+  }
+}
 
 // NetPay pega aquí cuando confirma (o rechaza) el cobro.
 // TODO: cuando tengamos la doc de autorización de webhooks de NetPay,
@@ -45,8 +65,30 @@ router.post('/netpay', async (req, res) => {
 
   const current = sessionState.get();
   if (current.orderId !== folioNumber) {
-    // Llegó una confirmación que no corresponde a la sesión activa.
-    console.log(`[webhook] webhook ignorado — folioNumber "${folioNumber}" no coincide con la sesión activa (orderId: ${current.orderId})`);
+    if (responseCode === '00') {
+      // Cobro real y EXITOSO que no corresponde a ninguna sesión activa: el
+      // cliente sí pagó, pero no hay ninguna sesión de fotos en curso a la
+      // que entregarle el servicio. Es el único caso, de todos los webhooks
+      // ignorados, que implica dinero real cobrado sin nada a cambio — se
+      // loguea aparte (console.error + prefijo distinto) para que no se
+      // pierda entre el resto de los "ignorado" rutinarios (duplicados,
+      // rechazos, timeouts sintéticos) y alguien pueda revisar a mano si
+      // hace falta reembolsar o entregar el servicio manualmente.
+      const detail =
+        `folioNumber="${folioNumber}" orderIdActual="${current.orderId}" ` +
+        `amount=${req.body.amount || '?'} MXN authCode=${req.body.authCode || '?'} ` +
+        `transactionId=${req.body.transactionId || '?'} cardNumber=****${req.body.cardNumber || '?'}`;
+      console.error(
+        `[webhook] COBRO HUÉRFANO — ${detail}. Revisar manualmente si se debe ` +
+        `reembolsar o entregar el servicio. (también registrado en ${ORPHAN_LOG_PATH})`
+      );
+      logOrphanCharge(detail);
+    } else {
+      // Llegó una confirmación que no corresponde a la sesión activa (y no
+      // fue un cobro exitoso) — rechazo, duplicado, o timeout. No implica
+      // dinero cobrado, así que el log rutinario basta.
+      console.log(`[webhook] webhook ignorado — folioNumber "${folioNumber}" no coincide con la sesión activa (orderId: ${current.orderId})`);
+    }
     return res.status(200).json(NETPAY_ACK);
   }
 
