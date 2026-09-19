@@ -3,6 +3,7 @@ const router = express.Router();
 const netpayService = require('../services/netpayService');
 const sessionState = require('../sessionState');
 const packages = require('../packages');
+const hardwareWatch = require('../hardwareWatch');
 
 // El frontend consulta esto para pintar las tarjetas de paquete —
 // nombre, precio y fotos vienen SIEMPRE de aquí, nunca hardcodeados
@@ -23,6 +24,17 @@ router.post('/pay', async (req, res) => {
   const pkg = packageId && packages.getById(packageId);
   if (!pkg) {
     return res.status(400).json({ error: `packageId inválido o faltante: ${packageId}` });
+  }
+
+  // Chequeo síncrono y FRESCO de cámara+impresora — la garantía real del
+  // monitoreo de hardware (ver src/hardwareWatch.js). No importa qué tan
+  // reciente sea el último chequeo del loop de fondo (cada 30s en idle):
+  // en el instante en que alguien va a pagar, se vuelve a confirmar antes
+  // de aceptar el cobro. No toca sessionState — la sesión se queda en
+  // 'idle' para que el frontend pueda reintentar sin necesitar un reset.
+  const hw = await hardwareWatch.checkNow();
+  if (!hw.ok) {
+    return res.status(503).json({ error: 'hardware_unavailable', detail: hw.reasons.join(' | ') });
   }
 
   const orderId = `order_${Date.now()}`;

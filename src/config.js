@@ -3,6 +3,28 @@ require('dotenv').config();
 module.exports = {
   port: process.env.PORT || 4000,
 
+  // Watchdog de sesión (ver src/sessionState.js): red de seguridad del lado
+  // del backend para los dos estados en los que la sesión puede quedarse
+  // colgada indefinidamente si el otro lado (NetPay o dslrBooth) nunca
+  // avisa. El frontend YA tiene su propio timeout de pago (30s, ver
+  // public/index.html) pero es best-effort del navegador — si el kiosco se
+  // recarga, el JS truena, o alguien cierra la pestaña, ese timer se pierde
+  // y el backend se quedaría esperando para siempre sin esto. Este watchdog
+  // es la autoridad real, independiente del frontend.
+  watchdog: {
+    // Cuánto esperar en 'awaiting_payment' sin que llegue el webhook de
+    // NetPay. Deliberadamente más largo que el timeout de 30s del frontend
+    // — no debe competir con él en operación normal, solo debe rescatar la
+    // sesión si el frontend nunca llegó a intentarlo.
+    paymentTimeoutMs: parseInt(process.env.PAYMENT_TIMEOUT_MS || '180000', 10),
+    // Cuánto esperar en 'booth_running' SIN NINGÚN evento nuevo de dslrBooth
+    // (se reinicia con cada evento que llega — countdown, capture_start,
+    // printing, etc. — así que esto detecta un cuelgue real a medio camino,
+    // no solo la ausencia del session_end final). 2 minutos da margen de
+    // sobra para el paso más lento normal (impresión en la DNP DS-RX1).
+    boothTimeoutMs: parseInt(process.env.BOOTH_TIMEOUT_MS || '120000', 10),
+  },
+
   netpay: {
     baseUrl: process.env.NETPAY_BASE_URL || 'https://sandbox.netpay.com.mx',
     username: process.env.NETPAY_USERNAME || '',
@@ -38,6 +60,14 @@ module.exports = {
     // la cámara conectada por USB en modo "PTP"/transferencia, no "Mass Storage".
     captureDir: process.env.CAMERA_CAPTURE_DIR || './captures',
     countdownSeconds: parseInt(process.env.CAMERA_COUNTDOWN_SECONDS || '3', 10),
+    // VID/PID de la Nikon D7200 de producción (ver src/services/
+    // hardwareMonitorService.js) — confirmados en Administrador de
+    // dispositivos > D7200 > Detalles > Id. de hardware (13-sep-2026):
+    // USB\VID_04B0&PID_0439. Se usan SOLO para confirmar presencia por WMI
+    // (Win32_PnPEntity), sin abrir sesión PTP — no tiene relación con
+    // digiCamControl/windowsCameraService.js (eso es solo windirect).
+    vid: process.env.CAMERA_VID || '04B0',
+    pid: process.env.CAMERA_PID || '0439',
   },
 
   printer: {
@@ -69,6 +99,33 @@ module.exports = {
     // Pausa entre copias al imprimir con mspaint /pt (no soporta un
     // parámetro nativo de "número de copias").
     printCopiesDelayMs: parseInt(process.env.WINDOWS_PRINT_COPY_DELAY_MS || '2000', 10),
+  },
+
+  // Monitoreo de hardware (cámara + impresora) — ver src/hardwareWatch.js y
+  // src/services/hardwareMonitorService.js. Solo corre en modos "Windows"
+  // (dslrbooth, windirect), porque las consultas son vía WMI/PowerShell —
+  // en BOOTH_MODE=direct (Linux) no se activa. Ver
+  // claude/Propuesta_Monitoreo_Camara_Impresora.md (doc del proyecto) para
+  // el diseño completo.
+  hardwareMonitor: {
+    // Cadencia normal: solo se revisa mientras la sesión está en "idle" (no
+    // tiene caso interrumpir una sesión de fotos ya pagada/en curso a media
+    // captura). Antes de aceptar un pago (POST /api/pay) SIEMPRE se hace
+    // además un chequeo síncrono fresco, así que este intervalo es solo
+    // para poder avisar (Discord) ANTES de que llegue un cliente.
+    idlePollIntervalMs: parseInt(process.env.HARDWARE_IDLE_POLL_MS || '30000', 10),
+    // Cadencia acelerada mientras la cabina está marcada "fuera de
+    // servicio": para detectar la recuperación (p.ej. alguien reconectó la
+    // cámara o destrabó la impresora) y reabrir la cabina solo, sin
+    // necesitar que alguien reinicie el backend.
+    retryPollIntervalMs: parseInt(process.env.HARDWARE_RETRY_POLL_MS || '10000', 10),
+  },
+
+  discord: {
+    // Webhook de un canal de Discord (gratis) — Configuración del canal >
+    // Integraciones > Webhooks > Nuevo webhook. Best-effort: si falla o no
+    // está configurado, solo se loguea, nunca rompe el flujo de la cabina.
+    webhookUrl: process.env.DISCORD_WEBHOOK_URL || '',
   },
 
   // Convivencia visual/de foco entre el navegador del kiosco y la ventana
