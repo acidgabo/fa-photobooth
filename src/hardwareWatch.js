@@ -57,7 +57,7 @@ const WINDOWS_CAPABLE_MODES = new Set(['dslrbooth', 'windirect']);
  * Impresora.md, solo cubre dslrbooth/windirect).
  */
 async function checkNow() {
-  if (!WINDOWS_CAPABLE_MODES.has(config.booth.mode)) {
+  if (!config.hardwareMonitor.enabled || !WINDOWS_CAPABLE_MODES.has(config.booth.mode)) {
     return current; // sin cambios: se queda en { ok: true, ... } por default
   }
   const result = await hardwareMonitorService.checkAll();
@@ -85,6 +85,10 @@ async function tick() {
 }
 
 function start() {
+  if (!config.hardwareMonitor.enabled) {
+    console.log('[hardwareWatch] HARDWARE_MONITOR_ENABLED=false — monitoreo desactivado por configuración');
+    return;
+  }
   if (!WINDOWS_CAPABLE_MODES.has(config.booth.mode)) {
     console.log(`[hardwareWatch] BOOTH_MODE=${config.booth.mode} no soporta monitoreo WMI — desactivado`);
     return;

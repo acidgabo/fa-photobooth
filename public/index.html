@@ -111,6 +111,16 @@
             transform: translateY(-5px);
         }
 
+        /* Guard contra doble submit: mientras /api/pay está en curso (ver
+           selectPackage()), evita que un segundo tap/clic sobre la misma
+           tarjeta (o otra) dispare una segunda venta antes de que responda
+           la primera — eso es lo que producía los cobros huérfanos
+           documentados en la bitácora de pruebas del proyecto. */
+        .packages-disabled .package {
+            pointer-events: none;
+            opacity: 0.6;
+        }
+
         .package h3 {
             font-size: clamp(15px, 1.5vw, 22px);
             color: #3d2817;
@@ -262,7 +272,12 @@
             <p id="packageSelected" class="payment-info"></p>
             <div class="loading-spinner"></div>
             <p class="status-message">Acerca o inserta tu tarjeta en la terminal</p>
-            <div class="button-group">
+            <!-- Oculto por default (style inline) hasta confirmar modo mock vía
+                 loadPaymentConfig() — contra terminal real, cualquiera podría
+                 tocar estos botones e inyectar un resultado falso al webhook
+                 real si quedaran visibles (ver bitácora de pruebas del
+                 proyecto). -->
+            <div class="button-group" id="simButtons" style="display: none">
                 <button id="btnSimOk" onclick="simulate(true)">✓ Simular aprobación</button>
                 <button id="btnSimErr" class="button-error" onclick="simulate(false)">✗ Simular error</button>
             </div>
@@ -333,8 +348,10 @@
         let currentPackage = null;   // objeto del catálogo del backend
         let currentOrderId = null;
         let pollTimer = null;
-        let paymentTimeoutTimer = null;  // 30s sin respuesta → error automático
+        let paymentTimeoutTimer = null;  // 30s sin respuesta → error automático (solo modo mock)
         let packagesCache = [];
+        let paymentMock = false;  // GET /api/config decide esto antes de que se pueda pagar
+        let paymentInFlight = false;  // guard contra doble submit en selectPackage()
 
         const PAYMENT_TIMEOUT_MS = 30000;
 
@@ -358,6 +375,29 @@
             });
         }
 
+        // Decide si el timeout local de 30s (más abajo) debe correr —
+        // solo tiene sentido en modo mock (ver src/config.js: netpay.isMock).
+        // Contra terminal real, el watchdog del backend es la autoridad real;
+        // el timer local de 30s mandaba un webhook fantasma que siempre se
+        // ignoraba en silencio y, combinado con un reload o un doble tap,
+        // dejaba cobros huérfanos (ver "Timer de 30s" en la bitácora de
+        // pruebas del proyecto). Si esta llamada falla, se queda en false
+        // por seguridad — sin confirmar modo mock, mejor no correr el timer.
+        async function loadPaymentConfig() {
+            try {
+                const cfg = await api('/api/config');
+                paymentMock = !!cfg.paymentMock;
+            } catch (err) {
+                paymentMock = false;
+            }
+            // Los botones "Simular aprobación/error" solo tienen sentido
+            // contra el mock — con terminal real, dejarlos visibles permite
+            // que cualquiera los toque e inyecte un resultado falso al
+            // webhook real (ver bitácora de pruebas del proyecto).
+            const simButtons = document.getElementById('simButtons');
+            if (simButtons) simButtons.style.display = paymentMock ? '' : 'none';
+        }
+
         // --- Pantalla 2: catálogo desde el backend --------------------
 
         async function loadPackages() {
@@ -379,9 +419,29 @@
 
         // --- Pago -----------------------------------------------------
 
+        // Deshabilita visualmente las tarjetas de paquete (pointer-events: none
+        // vía .packages-disabled, ver CSS arriba) mientras /api/pay está en
+        // curso — mismo patrón que ya usan los botones "Simular
+        // aprobación/error" (ver simulate()).
+        function setPackagesDisabled(disabled) {
+            const el = document.getElementById('packages');
+            if (el) el.classList.toggle('packages-disabled', disabled);
+        }
+
         async function selectPackage(packageId) {
+            // Guard contra doble submit: un segundo tap/clic mientras la
+            // primera petición sigue en vuelo se ignora por completo, en vez
+            // de disparar un segundo /api/pay que pisa la sesión de la
+            // primera venta — ver "5ª corrida" en la bitácora de pruebas del
+            // proyecto (cobro huérfano por doble tap, sin necesitar
+            // recargar ni esperar ningún timeout).
+            if (paymentInFlight) return;
+
             currentPackage = packagesCache.find(p => p.id === packageId);
             if (!currentPackage) return;
+
+            paymentInFlight = true;
+            setPackagesDisabled(true);
 
             document.getElementById('packageSelected').textContent =
                 currentPackage.name + ' - $' + currentPackage.price + ' MXN - ' + currentPackage.photos + ' fotos';
@@ -395,7 +455,9 @@
                 currentOrderId = result.orderId;
                 goToScreen(3);
                 startPolling();
-                startPaymentTimeout(); // 30s sin respuesta → timeout automático
+                if (paymentMock) {
+                    startPaymentTimeout(); // 30s sin respuesta → timeout automático (solo modo mock)
+                }
             } catch (err) {
                 // hardware_unavailable: el chequeo síncrono de src/hardwareWatch.js
                 // detectó cámara/impresora caída justo al intentar pagar — no es un
@@ -407,6 +469,14 @@
                 } else {
                     showError((err.message || 'No se pudo procesar el pago') + '<br>verifica tu tarjeta e intenta de nuevo');
                 }
+            } finally {
+                // Se libera siempre, incluso si /api/pay falló, para que una
+                // nueva selección (o retryPayment()) pueda intentarlo de
+                // nuevo. Cuando sí tuvo éxito, la pantalla ya avanzó a la 3
+                // (goToScreen arriba), así que esto solo importa para cuando
+                // el usuario regrese a la pantalla de paquetes más adelante.
+                paymentInFlight = false;
+                setPackagesDisabled(false);
             }
         }
 
@@ -432,6 +502,11 @@
         // a los ~3s — estos botones son para adelantarse o forzar error.)
 
         async function simulate(success, errorCode) {
+            // Blindaje aparte de ocultar los botones (ver loadPaymentConfig):
+            // contra terminal real, simulate() no debe poder mandar un
+            // resultado falso al webhook ni aunque alguien la llame directo
+            // desde la consola del navegador en vez de tocar el botón oculto.
+            if (!paymentMock) return;
             if (!currentOrderId) return;
             clearPaymentTimeout(); // el usuario respondió antes del timeout
             document.getElementById('btnSimOk').disabled = true;
@@ -453,6 +528,55 @@
 
         // --- Polling: el estado del backend decide la pantalla --------
 
+        // Traduce el estado del backend a la pantalla correcta. Vive aparte
+        // de startPolling() para poder usarse también UNA vez al cargar la
+        // página (ver resumeSessionIfNeeded()) — así, si alguien recarga por
+        // accidente mientras hay un pago en curso, la pantalla lo detecta y
+        // vuelve directo a "esperando pago" en vez de mostrar el inicio y
+        // dejar abierta la puerta a una segunda venta sobre la misma sesión
+        // (el mismo patrón de cobro huérfano documentado en la bitácora de
+        // pruebas, solo que por F5 en vez de por doble tap).
+        function applyServerState(state) {
+            if (state.status === 'error') {
+                const errorMessages = {
+                    payment_timeout: 'La terminal no respondió a tiempo.<br>Intenta de nuevo.',
+                    card_declined:   'Pago rechazado.<br>Verifica tu tarjeta e intenta de nuevo.',
+                    pago_rechazado:  'Pago rechazado.<br>Verifica tu tarjeta e intenta de nuevo.',
+                    // Watchdog del backend: la sesión de fotos se quedó sin avance
+                    // (dslrBooth dejó de mandar eventos a medio camino). No es un
+                    // error de pago — el cliente ya pagó — así que el mensaje no
+                    // menciona la tarjeta.
+                    booth_timeout:   'La cabina tardó demasiado en responder.<br>Toca para reintentar tu sesión de fotos.',
+                };
+                showError(
+                    errorMessages[state.error] ||
+                    (state.error
+                        ? state.error
+                        : 'No se pudo procesar el pago<br>verifica tu tarjeta e intenta de nuevo')
+                );
+                return;
+            }
+
+            if (state.status === 'awaiting_payment') {
+                if (currentScreen !== 3) goToScreen(3);
+                return;
+            }
+
+            if (state.status === 'payment_confirmed' || state.status === 'booth_running') {
+                if (currentScreen !== 4) goToScreen(4);
+                updateBoothStatus(state);
+                return;
+            }
+
+            if (state.status === 'idle') {
+                // La sesión de fotos terminó (o se reseteó): volver al inicio
+                if (currentScreen === 4 || currentScreen === 3) {
+                    stopPolling();
+                    goToScreen(1);
+                }
+            }
+        }
+
         function startPolling() {
             stopPolling();
             pollTimer = setInterval(async () => {
@@ -462,46 +586,48 @@
                 } catch (_) {
                     return; // error de red pasajero
                 }
-
-                if (state.status === 'error') {
-                    const errorMessages = {
-                        payment_timeout: 'La terminal no respondió a tiempo.<br>Intenta de nuevo.',
-                        card_declined:   'Pago rechazado.<br>Verifica tu tarjeta e intenta de nuevo.',
-                        pago_rechazado:  'Pago rechazado.<br>Verifica tu tarjeta e intenta de nuevo.',
-                        // Watchdog del backend: la sesión de fotos se quedó sin avance
-                        // (dslrBooth dejó de mandar eventos a medio camino). No es un
-                        // error de pago — el cliente ya pagó — así que el mensaje no
-                        // menciona la tarjeta.
-                        booth_timeout:   'La cabina tardó demasiado en responder.<br>Toca para reintentar tu sesión de fotos.',
-                    };
-                    showError(
-                        errorMessages[state.error] ||
-                        (state.error
-                            ? state.error
-                            : 'No se pudo procesar el pago<br>verifica tu tarjeta e intenta de nuevo')
-                    );
-                    return;
-                }
-
-                if (state.status === 'awaiting_payment') {
-                    if (currentScreen !== 3) goToScreen(3);
-                    return;
-                }
-
-                if (state.status === 'payment_confirmed' || state.status === 'booth_running') {
-                    if (currentScreen !== 4) goToScreen(4);
-                    updateBoothStatus(state);
-                    return;
-                }
-
-                if (state.status === 'idle') {
-                    // La sesión de fotos terminó (o se reseteó): volver al inicio
-                    if (currentScreen === 4 || currentScreen === 3) {
-                        stopPolling();
-                        goToScreen(1);
-                    }
-                }
+                applyServerState(state);
             }, POLL_INTERVAL_MS);
+        }
+
+        // Se llama UNA vez al cargar la página (ver el arranque hasta abajo)
+        // — si el backend ya tiene una sesión activa (p.ej. el usuario le
+        // dio F5 sin querer mientras estaba en "awaiting_payment" o
+        // "booth_running"), recupera esa sesión en vez de dejar que la
+        // pantalla arranque en "Inicio" como si nada — eso es lo que
+        // permitía mandar una segunda solicitud de pago sobre la venta que
+        // ya estaba en curso.
+        async function resumeSessionIfNeeded() {
+            let state;
+            try {
+                state = await api('/api/session/status');
+            } catch (err) {
+                return; // sin conexión al backend todavía; loadPackages() ya reporta el error
+            }
+            if (state.status === 'idle') return; // nada que recuperar
+
+            currentOrderId = state.orderId;
+
+            // sessionState en el backend solo guarda el NOMBRE del paquete
+            // (no el packageId) — lo buscamos en el catálogo ya cargado para
+            // reconstruir currentPackage (usado por el texto de la pantalla
+            // 3 y por retryPayment()). Si no se encuentra, no es crítico:
+            // applyServerState() de todas formas manda a la pantalla correcta.
+            if (state.package) {
+                const match = packagesCache.find(p => p.name === state.package);
+                if (match) {
+                    currentPackage = match;
+                    document.getElementById('packageSelected').textContent =
+                        match.name + ' - $' + match.price + ' MXN - ' + match.photos + ' fotos';
+                }
+            }
+
+            startPolling();
+            applyServerState(state);
+
+            if (paymentMock && state.status === 'awaiting_payment') {
+                startPaymentTimeout();
+            }
         }
 
         function stopPolling() {
@@ -585,8 +711,12 @@
             }, HARDWARE_POLL_INTERVAL_MS);
         }
 
-        loadPackages();
-        startHardwareWatch();
+        (async function init() {
+            await loadPackages();
+            await loadPaymentConfig();
+            await resumeSessionIfNeeded();
+            startHardwareWatch();
+        })();
     </script>
 </body>
 </html>

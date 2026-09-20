@@ -34,6 +34,23 @@ module.exports = {
     serialNumber: process.env.NETPAY_SERIAL_NUMBER || '',
     storeId: process.env.NETPAY_STORE_ID || '',
     webhookPath: process.env.NETPAY_WEBHOOK_PATH || '/webhooks/netpay',
+    // Log temporal de diagnóstico en el webhook (imprime el body completo
+    // recibido de la terminal) — activar con NETPAY_DEBUG_LOG=true en .env
+    // mientras se sigue validando la integración contra la terminal real.
+    // Debe quedar en false (o sin definir) en producción.
+    debugLog: process.env.NETPAY_DEBUG_LOG === 'true',
+    // true cuando NETPAY_BASE_URL apunta al mock local
+    // (mocks/mock-netpay.js, por default http://localhost:5001) en vez de
+    // al sandbox/producción real de NetPay. El frontend lo lee vía
+    // GET /api/config para decidir si corre su propio timeout local de
+    // 30s — ver "Timer de 30s" en Bitacora_Pruebas_Netpay_dslrBooth.md:
+    // contra terminal real ese timer mandaba un webhook fantasma que
+    // siempre se ignoraba en silencio, y combinado con un doble tap o un
+    // reload dejaba cobros huérfanos. Contra terminal real basta con el
+    // watchdog de arriba.
+    isMock: /^https?:\/\/(localhost|127\.0\.0\.1)/i.test(
+      process.env.NETPAY_BASE_URL || 'https://sandbox.netpay.com.mx'
+    ),
   },
 
   dslrbooth: {
@@ -108,6 +125,13 @@ module.exports = {
   // claude/Propuesta_Monitoreo_Camara_Impresora.md (doc del proyecto) para
   // el diseño completo.
   hardwareMonitor: {
+    // Apaga por completo el monitoreo (el loop de fondo Y el chequeo
+    // síncrono en POST /api/pay) sin tener que tocar BOOTH_MODE — útil para
+    // probar en una máquina sin cámara/impresora conectadas, o mientras se
+    // valida en campo si el chequeo da falsos positivos. Con esto en false,
+    // hardwareWatch.checkNow() siempre regresa { ok: true }, igual que en
+    // BOOTH_MODE=direct. Default: activado.
+    enabled: (process.env.HARDWARE_MONITOR_ENABLED || 'true') === 'true',
     // Cadencia normal: solo se revisa mientras la sesión está en "idle" (no
     // tiene caso interrumpir una sesión de fotos ya pagada/en curso a media
     // captura). Antes de aceptar un pago (POST /api/pay) SIEMPRE se hace
