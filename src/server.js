@@ -8,6 +8,7 @@ const webhookRoutes = require('./routes/webhook');
 const dslrboothRoutes = require('./routes/dslrbooth');
 const sessionRoutes = require('./routes/session');
 const diagnosticsRoutes = require('./routes/diagnostics');
+const hardwareWatch = require('./hardwareWatch');
 
 const app = express();
 app.use(cors());
@@ -36,4 +37,8 @@ app.listen(config.port, () => {
   console.log('  GET  /dslrbooth/events       <- dslrBooth manda triggers de sesión');
   console.log('  GET  /diagnostics/camera     <- (modo direct/windirect) confirma que la cámara está detectada');
   console.log('  GET  /diagnostics/printer    <- (modo direct/windirect) lista impresoras disponibles');
+
+  // Monitoreo de hardware (cámara + impresora) — ver src/hardwareWatch.js.
+  // No bloquea el arranque: si BOOTH_MODE no lo soporta, se desactiva solo.
+  hardwareWatch.start();
 });

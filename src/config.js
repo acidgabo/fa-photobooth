@@ -77,6 +77,14 @@ module.exports = {
     // la cámara conectada por USB en modo "PTP"/transferencia, no "Mass Storage".
     captureDir: process.env.CAMERA_CAPTURE_DIR || './captures',
     countdownSeconds: parseInt(process.env.CAMERA_COUNTDOWN_SECONDS || '3', 10),
+    // VID/PID de la Nikon D7200 de producción (ver src/services/
+    // hardwareMonitorService.js) — confirmados en Administrador de
+    // dispositivos > D7200 > Detalles > Id. de hardware (13-sep-2026):
+    // USB\VID_04B0&PID_0439. Se usan SOLO para confirmar presencia por WMI
+    // (Win32_PnPEntity), sin abrir sesión PTP — no tiene relación con
+    // digiCamControl/windowsCameraService.js (eso es solo windirect).
+    vid: process.env.CAMERA_VID || '04B0',
+    pid: process.env.CAMERA_PID || '0439',
   },
 
   printer: {
@@ -108,6 +116,40 @@ module.exports = {
     // Pausa entre copias al imprimir con mspaint /pt (no soporta un
     // parámetro nativo de "número de copias").
     printCopiesDelayMs: parseInt(process.env.WINDOWS_PRINT_COPY_DELAY_MS || '2000', 10),
+  },
+
+  // Monitoreo de hardware (cámara + impresora) — ver src/hardwareWatch.js y
+  // src/services/hardwareMonitorService.js. Solo corre en modos "Windows"
+  // (dslrbooth, windirect), porque las consultas son vía WMI/PowerShell —
+  // en BOOTH_MODE=direct (Linux) no se activa. Ver
+  // claude/Propuesta_Monitoreo_Camara_Impresora.md (doc del proyecto) para
+  // el diseño completo.
+  hardwareMonitor: {
+    // Apaga por completo el monitoreo (el loop de fondo Y el chequeo
+    // síncrono en POST /api/pay) sin tener que tocar BOOTH_MODE — útil para
+    // probar en una máquina sin cámara/impresora conectadas, o mientras se
+    // valida en campo si el chequeo da falsos positivos. Con esto en false,
+    // hardwareWatch.checkNow() siempre regresa { ok: true }, igual que en
+    // BOOTH_MODE=direct. Default: activado.
+    enabled: (process.env.HARDWARE_MONITOR_ENABLED || 'true') === 'true',
+    // Cadencia normal: solo se revisa mientras la sesión está en "idle" (no
+    // tiene caso interrumpir una sesión de fotos ya pagada/en curso a media
+    // captura). Antes de aceptar un pago (POST /api/pay) SIEMPRE se hace
+    // además un chequeo síncrono fresco, así que este intervalo es solo
+    // para poder avisar (Discord) ANTES de que llegue un cliente.
+    idlePollIntervalMs: parseInt(process.env.HARDWARE_IDLE_POLL_MS || '30000', 10),
+    // Cadencia acelerada mientras la cabina está marcada "fuera de
+    // servicio": para detectar la recuperación (p.ej. alguien reconectó la
+    // cámara o destrabó la impresora) y reabrir la cabina solo, sin
+    // necesitar que alguien reinicie el backend.
+    retryPollIntervalMs: parseInt(process.env.HARDWARE_RETRY_POLL_MS || '10000', 10),
+  },
+
+  discord: {
+    // Webhook de un canal de Discord (gratis) — Configuración del canal >
+    // Integraciones > Webhooks > Nuevo webhook. Best-effort: si falla o no
+    // está configurado, solo se loguea, nunca rompe el flujo de la cabina.
+    webhookUrl: process.env.DISCORD_WEBHOOK_URL || '',
   },
 
   // Convivencia visual/de foco entre el navegador del kiosco y la ventana

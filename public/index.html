@@ -302,6 +302,15 @@
             </div>
         </div>
 
+        <!-- Screen 6: Cabina fuera de servicio (monitoreo de hardware, ver
+             src/hardwareWatch.js) — sin botones: se activa y se quita sola
+             cuando el backend detecta la falla/recuperación por polling. -->
+        <div class="screen" data-screen="6">
+            <h1>CABINA FUERA DE SERVICIO</h1>
+            <div class="error-triangle">🔧</div>
+            <p class="status-message">Estamos resolviendo un problema técnico.<br>La cabina se reactivará sola en cuanto se resuelva.</p>
+        </div>
+
         <!-- Progress dots -->
         <div class="progress-dots">
             <div class="dot active" data-dot="1"></div>
@@ -358,8 +367,9 @@
             document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
             document.querySelector('[data-screen="' + screenNum + '"]').classList.add('active');
 
-            // dots: el 5 (error) no tiene dot propio, se queda en el paso 3
-            const dotStep = screenNum === 5 ? 3 : Math.min(screenNum, 4);
+            // dots: el 5 (error) no tiene dot propio, se queda en el paso 3.
+            // El 6 (fuera de servicio) tampoco tiene dot — no apaga ninguno.
+            const dotStep = screenNum === 5 ? 3 : screenNum === 6 ? 0 : Math.min(screenNum, 4);
             document.querySelectorAll('.dot').forEach(dot => {
                 dot.classList.toggle('active', parseInt(dot.dataset.dot) <= dotStep);
             });
@@ -449,7 +459,16 @@
                     startPaymentTimeout(); // 30s sin respuesta → timeout automático (solo modo mock)
                 }
             } catch (err) {
-                showError((err.message || 'No se pudo procesar el pago') + '<br>verifica tu tarjeta e intenta de nuevo');
+                // hardware_unavailable: el chequeo síncrono de src/hardwareWatch.js
+                // detectó cámara/impresora caída justo al intentar pagar — no es un
+                // problema de la tarjeta, así que no lleva el sufijo de "verifica tu
+                // tarjeta". El polling de fondo (startHardwareWatch) ya se encargará
+                // de mostrar/quitar la pantalla 6 sola; aquí solo evitamos cobrar.
+                if (err.message === 'hardware_unavailable') {
+                    showError('La cabina no puede procesar tu sesión en este momento.<br>Intenta de nuevo en unos minutos.');
+                } else {
+                    showError((err.message || 'No se pudo procesar el pago') + '<br>verifica tu tarjeta e intenta de nuevo');
+                }
             } finally {
                 // Se libera siempre, incluso si /api/pay falló, para que una
                 // nueva selección (o retryPayment()) pueda intentarlo de
@@ -652,10 +671,51 @@
             goToScreen(5);
         }
 
+        // --- Monitoreo de hardware (cámara + impresora) ----------------
+        // Independiente del polling de pago/sesión (startPolling/stopPolling,
+        // que solo corre durante screens 3-4): este corre SIEMPRE desde que
+        // carga la página, porque la pantalla 6 "Cabina fuera de servicio"
+        // se activa típicamente desde screen 1 (idle), donde el otro
+        // polling no está corriendo. Cadencia más relajada (5s) porque
+        // aquí no hay urgencia de refresco como en el flujo de pago — la
+        // garantía real ante un pago activo la da el chequeo síncrono que
+        // ya hace el backend en POST /api/pay (ver src/hardwareWatch.js).
+        // Auto-recupera: en cuanto el backend reporta hardware.ok=true de
+        // nuevo, regresa solo a la pantalla de inicio.
+        const HARDWARE_POLL_INTERVAL_MS = 5000;
+        let screenBeforeHardwareBlock = 1;
+
+        function startHardwareWatch() {
+            setInterval(async () => {
+                let state;
+                try {
+                    state = await api('/api/session/status');
+                } catch (_) {
+                    return; // error de red pasajero
+                }
+
+                const hardwareOk = !state.hardware || state.hardware.ok !== false;
+
+                if (!hardwareOk && currentScreen !== 6) {
+                    // Solo interrumpe si estamos "libres" (inicio o eligiendo
+                    // paquete) — una sesión ya pagada/en curso (screens 3-5)
+                    // no se corta a media captura; el chequeo síncrono de
+                    // /api/pay ya evitó que se aceptara un pago nuevo.
+                    if (currentScreen === 1 || currentScreen === 2) {
+                        screenBeforeHardwareBlock = currentScreen;
+                        goToScreen(6);
+                    }
+                } else if (hardwareOk && currentScreen === 6) {
+                    goToScreen(screenBeforeHardwareBlock);
+                }
+            }, HARDWARE_POLL_INTERVAL_MS);
+        }
+
         (async function init() {
             await loadPackages();
             await loadPaymentConfig();
             await resumeSessionIfNeeded();
+            startHardwareWatch();
         })();
     </script>
 </body>

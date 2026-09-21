@@ -65,6 +65,87 @@ function psQuote(value) {
   return String(value).replace(/'/g, "''");
 }
 
+// Códigos de Win32_Printer.DetectedErrorState (WMI) que nos importan para
+// decidir si la impresora puede imprimir ahora mismo. Ver documentación de
+// DetectedErrorState en MSDN para la lista completa de valores.
+const PRINTER_ERROR_STATES = {
+  3: 'Poca tinta/tóner',
+  4: 'Sin tinta/tóner',
+  5: 'Papel atascado',
+  6: 'Papel agotado',
+  7: 'Poco papel',
+  8: 'Puerta abierta',
+  9: 'Cubierta abierta',
+  10: 'Falla de interfaz',
+  11: 'Fuera de línea',
+  12: 'Fuera de servicio',
+  15: 'Salida llena',
+  16: 'No hay entrada de papel',
+  17: 'Error de tóner/tinta',
+  19: 'Voltaje bajo',
+  20: 'Sobrecalentada',
+  21: 'Atasco de nuevo',
+  22: 'Puerto de salida atascado',
+  23: 'Papel torcido',
+  24: 'Fuera de memoria',
+  25: 'Puerta abierta',
+};
+
+/**
+ * Confirma que la impresora configurada en PRINTER_NAME está lista para
+ * imprimir, vía WMI (Win32_Printer) — sin mandar nada a imprimir. Usado por
+ * src/hardwareWatch.js (monitoreo de hardware), independiente de quién
+ * mande el trabajo de impresión real (dslrBooth o este mismo servicio).
+ */
+async function getPrinterStatus() {
+  if (!config.printer.name) {
+    return { ok: false, detail: 'PRINTER_NAME no está configurado en .env' };
+  }
+
+  const psPrinter = psQuote(config.printer.name);
+  const script = `
+$ErrorActionPreference = 'Stop'
+$p = Get-CimInstance -ClassName Win32_Printer -Filter "Name='${psPrinter}'"
+if (-not $p) { Write-Output 'NOT_FOUND'; exit 0 }
+Write-Output ("WorkOffline=" + $p.WorkOffline)
+Write-Output ("DetectedErrorState=" + $p.DetectedErrorState)
+`.trim();
+
+  try {
+    const { stdout } = await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script]);
+    const out = stdout.trim();
+
+    if (out.startsWith('NOT_FOUND') || !out) {
+      return { ok: false, detail: `No se encontró la impresora "${config.printer.name}" en Windows` };
+    }
+
+    const values = {};
+    out.split('\n').forEach((line) => {
+      const [key, val] = line.split('=');
+      if (key) values[key.trim()] = (val || '').trim();
+    });
+
+    const workOffline = values.WorkOffline === 'True';
+    const errorState = parseInt(values.DetectedErrorState, 10) || 0;
+    const knownError = PRINTER_ERROR_STATES[errorState];
+
+    if (workOffline) {
+      return { ok: false, detail: `Impresora "${config.printer.name}" está fuera de línea (pausada en Windows)` };
+    }
+    if (knownError) {
+      return { ok: false, detail: `Impresora "${config.printer.name}": ${knownError}` };
+    }
+
+    return { ok: true, detail: null };
+  } catch (err) {
+    console.error('[windowsPrinterService] getPrinterStatus falló:', err.message, err.stderr);
+    return {
+      ok: false,
+      detail: `No se pudo consultar el estado de "${config.printer.name}" vía WMI: ${err.message}`,
+    };
+  }
+}
+
 async function printPhoto(filePath) {
   if (!config.printer.name) {
     throw new Error(
@@ -127,4 +208,4 @@ try {
   return { copies };
 }
 
-module.exports = { listPrinters, printPhoto };
+module.exports = { listPrinters, printPhoto, getPrinterStatus };
