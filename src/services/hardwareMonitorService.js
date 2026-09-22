@@ -82,4 +82,38 @@ async function checkAll() {
   };
 }
 
-module.exports = { checkCameraPresence, checkAll };
+/**
+ * Verificación específica POST-sesión (distinta de checkAll(), que es el
+ * chequeo genérico de fondo) — usada por src/sessionState.js para confirmar
+ * que una impresión que dslrBooth SÍ reportó (Trigger "printing" visto)
+ * realmente haya salido.
+ *
+ * Exige AMBAS condiciones a la vez, no una sola:
+ *  - getPrinterStatus() con problema (fuera de línea, atascada, sin papel,
+ *    etc.) — por sí sola es ambigua: en pruebas reales (19-sep-2026) la
+ *    impresora "parpadeó" fuera de línea y recuperada varias veces seguidas
+ *    sin que eso implicara que ningún trabajo se haya perdido.
+ *  - Un trabajo TODAVÍA pendiente en la cola de esa impresora — por sí sola
+ *    también es ambigua: podría ser un trabajo a punto de completarse con
+ *    normalidad, o uno que ya se limpió de la cola (los trabajos pueden
+ *    desaparecer de Win32_PrintJob en 1-2s en impresoras conectadas
+ *    directo, incluso cuando sí imprimieron bien).
+ * Juntas sí son una confirmación razonable: un trabajo que sigue ahí Y la
+ * impresora reportando problema, al mismo tiempo, es la combinación que
+ * indica que ese trabajo específico no se pudo completar.
+ */
+async function checkPrintFailure() {
+  const printerStatus = await windowsPrinterService.getPrinterStatus();
+  if (printerStatus.ok) {
+    return { failed: false };
+  }
+
+  const pendingJobs = await windowsPrinterService.getPendingJobCount();
+  if (pendingJobs > 0) {
+    return { failed: true, detail: printerStatus.detail, pendingJobs };
+  }
+
+  return { failed: false };
+}
+
+module.exports = { checkCameraPresence, checkAll, checkPrintFailure };

@@ -22,11 +22,14 @@ router.get('/events', (req, res) => {
   // confirmada) — así, si el robo de foco falla o tarda, el cliente ve esa
   // pantalla en vez de la interfaz real de LumaBooth a medio transicionar —
   // y solo después se intenta el cambio de foco a nivel de SO
-  // (best-effort). No se espera esta respuesta (fire-and-forget): dslrBooth
-  // solo necesita el 200 OK, no le importa cuánto tarde lo que hagamos con
-  // el evento.
+  // (best-effort, con reintentos — ver tryFocusBrowserPersistent en
+  // windowFocusService.js: un solo intento no bastaba cuando la sesión
+  // terminaba por una falla de hardware, ver Guía de Pruebas — Monitoreo de
+  // Hardware, 19-sep-2026). No se espera esta respuesta (fire-and-forget):
+  // dslrBooth solo necesita el 200 OK, no le importa cuánto tarde lo que
+  // hagamos con el evento.
   if (eventType === 'session_end' && config.booth.mode === 'dslrbooth') {
-    dslrboothService.tryShowLockscreen().then(() => windowFocusService.tryFocusBrowser());
+    dslrboothService.tryShowLockscreen().then(() => windowFocusService.tryFocusBrowserPersistent());
   }
 
   res.send('ok');

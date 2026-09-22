@@ -46,4 +46,31 @@ function notifyHardwareRecovered() {
   return notifyDiscord('✅ Cabina restablecida — el monitoreo de hardware detectó que todo volvió a la normalidad.');
 }
 
-module.exports = { notifyDiscord, notifyHardwareDown, notifyHardwareRecovered };
+// Aviso de una sesión que dslrBooth cerró con "session_end" sin que
+// hayamos visto antes el Trigger "printing" — señal (no prueba) de que la
+// entrega de la foto pudo fallar aunque el cobro sí se haya hecho. Ver
+// Grupo 4 de la taxonomía de fallas (claude/Propuesta_Monitoreo_Camara_
+// Impresora.md u otro doc del proyecto donde quede la taxonomía completa).
+// Por ahora es solo para que alguien pueda revisar/reimprimir a mano — no
+// dispara ninguna cancelación automática ni cambia lo que ve el cliente.
+function notifySessionLikelyIncomplete(detail) {
+  return notifyDiscord(`⚠️ Sesión cerrada sin confirmar impresión — revisar\nDetalles: ${detail}`);
+}
+
+// Aviso cuando una cancelación automática de venta (Grupos 2/3 de la
+// taxonomía de fallas — cobro hecho, cero fotos entregadas) FALLA: fuera de
+// la ventana de las 8pm CDMX, problema de red con la terminal, etc. A
+// diferencia del resto de las notificaciones, esto sí implica dinero
+// cobrado sin resolver — requiere reverso MANUAL, por eso se marca distinto
+// (🔴 en vez de ⚠️).
+function notifyAutoCancelFailed(detail) {
+  return notifyDiscord(`🔴 Cancelación automática de venta FALLÓ — revisar y reversar a mano\nDetalles: ${detail}`);
+}
+
+module.exports = {
+  notifyDiscord,
+  notifyHardwareDown,
+  notifyHardwareRecovered,
+  notifySessionLikelyIncomplete,
+  notifyAutoCancelFailed,
+};
