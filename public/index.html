@@ -5,15 +5,47 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>PhotoBooth Demo</title>
     <style>
-        /* Diseño basado en el mockup de referencia (photoboothdemo 3.html).
-           La diferencia es que aquí las transiciones NO son simuladas con
-           goToScreen() a mano: las dispara el estado real del backend vía
-           polling a /api/session/status. */
+        /* ============================================================
+           Diseño de marca "SMILE PHOTOBOOTH" aplicado por Karen (cliente),
+           assets/tipografía compartidos por Drive/WhatsApp el 19-sep-2026.
+           - Tipografía de titulares: Lazydog (Canva), self-hosted en
+             fonts/Lazydog.otf — Karen solo mandó esta, así que los textos
+             secundarios (subtítulo, botones, detalles) usan una sans
+             bold del sistema como aproximación en lo que confirma si hay
+             una segunda tipografía.
+           - El círculo dibujado a mano detrás del precio es el PNG que
+             mandó Karen (img/circulo.png) — no se recreó en CSS puro
+             porque el trazo "sketchy" es difícil de igualar con bordes.
+           - Los PRECIOS/tomas siguen siendo texto vivo (vienen de
+             GET /api/packages, ver src/packages.js) — nunca se hornean
+             en una imagen, para que un cambio de precio no dependa de
+             pedirle un PNG nuevo a Karen.
+           - Las transiciones de pantalla NO son simuladas a mano: las
+             dispara el estado real del backend vía polling a
+             /api/session/status (igual que antes de este rediseño).
+        ============================================================ */
+        @font-face {
+            font-family: 'Lazydog';
+            src: url('fonts/Lazydog.otf') format('opentype');
+            font-weight: normal;
+            font-style: normal;
+            font-display: swap;
+        }
+
         * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        :root {
+            --bg: #f4f4f4;
+            --ink: #1c1c1c;
+            --charcoal: #46413d;
+            --charcoal-dark: #322e2b;
+            --charcoal-light: #5c5651;
+            --card-bg: #ffffff;
+        }
 
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: #1a1a1a;
+            background: var(--bg);
             display: flex;
             justify-content: center;
             align-items: center;
@@ -28,13 +60,10 @@
             width: 100%;
             max-width: 1600px;
             min-height: min(900px, 94vh);
-            background: linear-gradient(135deg, #c9b89d 0%, #d4c4b0 100%);
-            border: clamp(4px, 0.6vw, 10px) solid #333;
-            border-radius: 16px;
+            background: var(--bg);
             overflow: hidden;
             display: flex;
             flex-direction: column;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.4);
             position: relative;
         }
 
@@ -54,90 +83,119 @@
 
         @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 
-        .screen h1 {
-            font-size: clamp(32px, 4.5vw, 84px);
-            font-style: italic;
-            color: #3d2817;
-            letter-spacing: 2px;
+        /* Titulares grandes en Lazydog (SMILE, ELIGE TU PAQUETE, ¡ÉXITO!, etc.) */
+        .screen h1,
+        .brand-title {
+            font-family: 'Lazydog', 'Segoe UI', sans-serif;
+            font-size: clamp(48px, 7vw, 130px);
+            font-weight: normal;
+            color: var(--ink);
+            letter-spacing: 1px;
+            margin: 0;
+            line-height: 1;
+        }
+
+        .screen h2,
+        .brand-title-sm {
+            font-family: 'Lazydog', 'Segoe UI', sans-serif;
+            font-size: clamp(34px, 4.6vw, 76px);
+            font-weight: normal;
+            color: var(--ink);
+            letter-spacing: 1px;
+            margin: 0;
+            line-height: 1;
+        }
+
+        /* Textos secundarios: aproximación con sans bold del sistema
+           mientras se confirma si Karen tiene una segunda tipografía
+           (ver comentario arriba). */
+        .brand-subtitle {
+            font-family: 'Segoe UI', Arial, sans-serif;
+            font-weight: 700;
+            font-size: clamp(16px, 2vw, 30px);
+            letter-spacing: clamp(3px, 0.6vw, 8px);
+            color: var(--ink);
+            text-transform: uppercase;
             margin: 0;
         }
 
-        .screen h2 {
-            font-size: clamp(26px, 3.4vw, 56px);
-            font-style: italic;
-            color: #3d2817;
-            letter-spacing: 1px;
-            margin: 0;
+        .logo-lockup {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: clamp(4px, 0.6vw, 10px);
         }
 
         .subtitle {
             font-size: clamp(16px, 1.8vw, 28px);
-            color: #5a4a3a;
-            font-style: italic;
+            color: var(--charcoal);
             margin: 0;
-        }
-
-        .icon {
-            font-size: clamp(60px, 8vw, 140px);
-            animation: pulse 2s ease-in-out infinite;
-        }
-
-        @keyframes pulse {
-            0%, 100% { opacity: 1; transform: scale(1); }
-            50% { opacity: 0.8; transform: scale(1.05); }
         }
 
         .packages {
             display: flex;
-            gap: clamp(20px, 2.6vw, 48px);
+            gap: clamp(20px, 2.6vw, 56px);
             justify-content: center;
             width: 100%;
             flex-wrap: wrap;
         }
 
         .package {
-            background: rgba(255, 255, 255, 0.7);
-            padding: clamp(20px, 2.6vw, 48px);
-            border-radius: 12px;
-            min-width: clamp(160px, 18vw, 320px);
             cursor: pointer;
             transition: all 0.3s ease;
-            border: 2px solid transparent;
         }
 
-        .package:hover {
-            background: rgba(255, 255, 255, 0.9);
-            border-color: #8b7355;
-            transform: translateY(-5px);
+        .package:hover .package-circle {
+            transform: translateY(-5px) scale(1.03);
         }
 
-        /* Guard contra doble submit: mientras /api/pay está en curso (ver
-           selectPackage()), evita que un segundo tap/clic sobre la misma
-           tarjeta (o otra) dispare una segunda venta antes de que responda
-           la primera — eso es lo que producía los cobros huérfanos
-           documentados en la bitácora de pruebas del proyecto. */
         .packages-disabled .package {
             pointer-events: none;
             opacity: 0.6;
         }
 
-        .package h3 {
-            font-size: clamp(15px, 1.5vw, 22px);
-            color: #3d2817;
-            margin-bottom: 10px;
-            font-weight: 600;
+        .package {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: clamp(2px, 0.4vw, 6px);
         }
 
-        .package .price {
-            font-size: clamp(28px, 3.2vw, 54px);
-            color: #3d2817;
-            font-weight: bold;
-            margin-bottom: 10px;
+        /* "2 tiras / X tomas": etiqueta arriba del círculo, no adentro —
+           el óvalo de Karen (img/circulo.png) es muy aplanado (~2.46:1,
+           medido de su propio bounding box) para meter 3 líneas sin que
+           se salgan, así que solo encierra el precio (ver .package-circle)
+           y esto queda como caption encima. */
+        .package-label {
+            font-family: 'Lazydog', 'Segoe UI', sans-serif;
+            font-size: clamp(15px, 1.6vw, 24px);
+            color: var(--ink);
+            line-height: 1.15;
         }
 
-        .package .details {
-            font-size: clamp(13px, 1.3vw, 20px);
-            color: #5a4a3a;
+        /* Tarjeta de paquete = círculo dibujado a mano (img/circulo.png,
+           recortado a su propio bounding box, aspect ~2.46:1) encerrando
+           el precio — el precio sigue viniendo vivo de GET /api/packages,
+           nunca horneado en la imagen. */
+        .package-circle {
+            width: clamp(200px, 20vw, 320px);
+            aspect-ratio: 2.46 / 1;
+            background-image: url('img/circulo.png');
+            background-repeat: no-repeat;
+            background-position: center;
+            background-size: 100% 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0 12%;
+            transition: transform 0.3s ease;
+        }
+
+        .package-price {
+            font-family: 'Lazydog', 'Segoe UI', sans-serif;
+            font-size: clamp(24px, 2.6vw, 42px);
+            color: var(--ink);
+            white-space: nowrap;
         }
 
         .button-group {
@@ -148,68 +206,73 @@
             width: 100%;
         }
 
+        /* Botón pill "gloss" oscuro — estilo del BOTON INICIO de Karen,
+           recreado en CSS (no como imagen) para que siga siendo un
+           <button> real: mismo click handler, mismo soporte de
+           disabled/hover que ya tenía el resto de la pantalla táctil.
+           Texto en Lazydog (confirmado 21-sep-2026: todos los botones
+           usan esta tipografía, no la sans de respaldo). */
         button {
-            background: rgba(255, 255, 255, 0.8);
-            border: 2px solid #8b7355;
-            padding: clamp(12px, 1.4vw, 22px) clamp(20px, 2.6vw, 44px);
-            border-radius: 8px;
-            font-size: clamp(15px, 1.5vw, 22px);
-            color: #3d2817;
+            background: linear-gradient(180deg, var(--charcoal-light) 0%, var(--charcoal) 55%, var(--charcoal-dark) 100%);
+            border: none;
+            padding: clamp(12px, 1.4vw, 20px) clamp(28px, 3.2vw, 56px);
+            border-radius: 999px;
+            font-family: 'Lazydog', 'Segoe UI', sans-serif;
+            font-size: clamp(20px, 2.1vw, 32px);
+            font-weight: normal;
+            letter-spacing: 0.5px;
+            color: #fff;
             cursor: pointer;
-            transition: all 0.3s ease;
-            font-weight: 600;
+            transition: all 0.25s ease;
             white-space: nowrap;
+            box-shadow: 0 8px 20px rgba(0,0,0,0.18), inset 0 1px 1px rgba(255,255,255,0.25);
         }
 
         button:hover {
-            background: rgba(255, 255, 255, 1);
-            border-color: #3d2817;
-            transform: scale(1.05);
+            transform: scale(1.04);
+            box-shadow: 0 10px 26px rgba(0,0,0,0.22), inset 0 1px 1px rgba(255,255,255,0.3);
         }
 
         button:active { transform: scale(0.98); }
         button:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
 
         .button-back {
-            background: #d4c4b0;
-            border-color: #8b7355;
-            color: #3d2817;
+            background: transparent;
+            color: var(--charcoal);
+            box-shadow: none;
+            border: 2px solid var(--charcoal);
+        }
+
+        .button-back:hover {
+            background: rgba(0,0,0,0.05);
+            box-shadow: none;
         }
 
         .button-error {
-            background: rgba(255, 200, 200, 0.8);
-            border-color: #c44;
+            background: linear-gradient(180deg, #d97070 0%, #b84a4a 55%, #973a3a 100%);
         }
 
         .loading-spinner {
             width: clamp(50px, 6vw, 100px);
             height: clamp(50px, 6vw, 100px);
-            border: 4px solid rgba(61, 40, 23, 0.2);
-            border-top: 4px solid #3d2817;
+            border: 4px solid rgba(28, 28, 28, 0.15);
+            border-top: 4px solid var(--charcoal);
             border-radius: 50%;
             animation: spin 1s linear infinite;
         }
 
         @keyframes spin { to { transform: rotate(360deg); } }
 
-        .payment-info {
-            background: rgba(255, 255, 255, 0.7);
-            padding: clamp(14px, 1.6vw, 24px) clamp(20px, 2.4vw, 36px);
-            border-radius: 8px;
-            font-size: clamp(14px, 1.3vw, 20px);
-            color: #3d2817;
-            margin: 0;
-            max-width: 90%;
-        }
-
+        .payment-info,
         .status-message {
-            background: rgba(255, 255, 255, 0.7);
+            background: var(--card-bg);
             padding: clamp(14px, 1.6vw, 24px) clamp(20px, 2.4vw, 36px);
-            border-radius: 8px;
+            border-radius: 16px;
             font-size: clamp(14px, 1.3vw, 20px);
-            color: #3d2817;
+            color: var(--ink);
             margin: 0;
             max-width: 90%;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.06);
         }
 
         .checkmark {
@@ -242,33 +305,34 @@
             width: clamp(10px, 1vw, 16px);
             height: clamp(10px, 1vw, 16px);
             border-radius: 50%;
-            background: rgba(61, 40, 23, 0.3);
+            background: rgba(28, 28, 28, 0.2);
             transition: background 0.3s ease;
         }
 
-        .dot.active { background: #3d2817; }
+        .dot.active { background: var(--charcoal); }
     </style>
 </head>
 <body>
     <div class="kiosk-frame">
         <!-- Screen 1: Inicio -->
         <div class="screen active" data-screen="1">
-            <h1>PHOTO BOOTH</h1>
-            <p class="subtitle">Captura tus recuerdos</p>
-            <div class="icon">📷</div>
-            <button onclick="goToScreen(2)">TOCA PARA INICIAR</button>
+            <div class="logo-lockup">
+                <h1 class="brand-title">SMILE</h1>
+                <p class="brand-subtitle">Photobooth</p>
+            </div>
+            <button onclick="goToScreen(2)">Toca para iniciar</button>
         </div>
 
         <!-- Screen 2: Seleccionar paquete (tarjetas generadas desde GET /api/packages) -->
         <div class="screen" data-screen="2">
-            <h2>ELIGE TU PAQUETE</h2>
+            <h2 class="brand-title-sm">Elige tu paquete</h2>
             <div class="packages" id="packages"></div>
             <button class="button-back" onclick="goToScreen(1)">← Atrás</button>
         </div>
 
         <!-- Screen 3: Procesando pago -->
         <div class="screen" data-screen="3">
-            <h2>PROCESANDO PAGO</h2>
+            <h2 class="brand-title-sm">Procesando pago</h2>
             <p id="packageSelected" class="payment-info"></p>
             <div class="loading-spinner"></div>
             <p class="status-message">Acerca o inserta tu tarjeta en la terminal</p>
@@ -285,7 +349,7 @@
 
         <!-- Screen 4: Éxito / sesión de fotos en curso -->
         <div class="screen" data-screen="4">
-            <h1>¡ÉXITO!</h1>
+            <h1 class="brand-title">¡Éxito!</h1>
             <div class="checkmark">✓</div>
             <div class="loading-spinner" id="successSpinner"></div>
             <p class="status-message" id="boothStatus">Iniciando sesión de fotos...</p>
@@ -293,7 +357,7 @@
 
         <!-- Screen 5: Error -->
         <div class="screen" data-screen="5">
-            <h1>ERROR</h1>
+            <h1 class="brand-title">Error</h1>
             <div class="error-triangle">⚠</div>
             <p class="status-message" id="errorMessage">No se pudo procesar el pago<br>verifica tu tarjeta e intenta de nuevo</p>
             <div class="button-group">
@@ -306,7 +370,7 @@
              src/hardwareWatch.js) — sin botones: se activa y se quita sola
              cuando el backend detecta la falla/recuperación por polling. -->
         <div class="screen" data-screen="6">
-            <h1>CABINA FUERA DE SERVICIO</h1>
+            <h1 class="brand-title">Cabina fuera de servicio</h1>
             <div class="error-triangle">🔧</div>
             <p class="status-message">Estamos resolviendo un problema técnico.<br>La cabina se reactivará sola en cuanto se resuelva.</p>
         </div>
@@ -408,11 +472,19 @@
                 el.innerHTML = '<p class="status-message">No se pudo cargar el catálogo: ' + err.message + '</p>';
                 return;
             }
+            // Tarjeta = etiqueta "2 tiras / X tomas" arriba + el precio
+            // encerrado en el círculo dibujado a mano de Karen (ver
+            // .package-circle) — el óvalo real es muy aplanado (~2.46:1)
+            // para meter las 3 líneas sin que se salgan, así que solo el
+            // precio va adentro. El nombre del paquete (p.name) no se
+            // muestra porque el diseño de Karen no lo contempla.
             el.innerHTML = packagesCache.map(p =>
                 '<div class="package" onclick="selectPackage(\'' + p.id + '\')">' +
-                    '<h3>' + p.name + '</h3>' +
-                    '<div class="price">$' + p.price + ' MXN</div>' +
-                    '<div class="details">Collage ' + p.photos + ' fotos</div>' +
+                    '<div class="package-label">2 tiras</div>' +
+                    '<div class="package-label">' + p.photos + ' tomas</div>' +
+                    '<div class="package-circle">' +
+                        '<div class="package-price">$' + p.price + ' MXN</div>' +
+                    '</div>' +
                 '</div>'
             ).join('');
         }
