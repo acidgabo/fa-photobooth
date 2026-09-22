@@ -8,6 +8,7 @@ const dslrboothService = require('../services/dslrboothService');
 const directBoothService = require('../services/directBoothService');
 const windirectBoothService = require('../services/windirectBoothService');
 const windowFocusService = require('../services/windowFocusService');
+const { autoCancelSale } = require('../services/autoCancelService');
 
 // Registro en archivo aparte de los cobros huérfanos (ver COBRO HUÉRFANO más
 // abajo) — para que quede constancia aunque nadie esté viendo la consola en
@@ -119,6 +120,9 @@ router.post('/netpay', async (req, res) => {
     sessionState.set({ status: 'booth_running' });
     directBoothService.runDirectSession().catch((err) => {
       sessionState.set({ status: 'error', error: `booth directo: ${err.message}` });
+      // Grupo 2 de la taxonomía de fallas: el cobro ya se hizo y toda la
+      // sesión (captura + impresión) truena — cero fotos entregadas.
+      autoCancelSale(terminalOrderId, `booth directo: ${err.message}`);
     });
   } else if (config.booth.mode === 'windirect') {
     // Modo demo (Windows): cámara/impresora reales, controladas por este
@@ -128,6 +132,7 @@ router.post('/netpay', async (req, res) => {
     sessionState.set({ status: 'booth_running' });
     windirectBoothService.runDirectSession().catch((err) => {
       sessionState.set({ status: 'error', error: `booth directo (Windows): ${err.message}` });
+      autoCancelSale(terminalOrderId, `booth directo (Windows): ${err.message}`);
     });
   } else {
     try {
@@ -145,6 +150,12 @@ router.post('/netpay', async (req, res) => {
       sessionState.set({ status: 'booth_running' });
     } catch (err) {
       sessionState.set({ status: 'error', error: `dslrBooth: ${err.message}` });
+      // Grupo 2 de la taxonomía de fallas: el cobro ya se hizo y
+      // startSession() truena de inmediato, antes de que exista siquiera un
+      // session_start — cero fotos, cero interacción del cliente. Candidato
+      // limpio para cancelar automáticamente (ver docs del proyecto).
+      // Fire-and-forget: nunca debe tirar el manejo del webhook si falla.
+      autoCancelSale(terminalOrderId, `dslrBooth: ${err.message}`);
     }
   }
 

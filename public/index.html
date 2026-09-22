@@ -352,8 +352,10 @@
         let packagesCache = [];
         let paymentMock = false;  // GET /api/config decide esto antes de que se pueda pagar
         let paymentInFlight = false;  // guard contra doble submit en selectPackage()
+        let errorAutoReturnTimer = null;  // 30s en pantalla de error sin tocar nada → regresa sola al inicio
 
         const PAYMENT_TIMEOUT_MS = 30000;
+        const ERROR_AUTO_RETURN_MS = 30000;
 
         async function api(path, options) {
             const res = await fetch(path, options);
@@ -366,6 +368,14 @@
             currentScreen = screenNum;
             document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
             document.querySelector('[data-screen="' + screenNum + '"]').classList.add('active');
+
+            // Regreso automático al inicio desde la pantalla de error (ver
+            // showError()/startErrorAutoReturn()) si nadie toca ningún botón en
+            // ERROR_AUTO_RETURN_MS. Se cancela en cuanto se sale de la pantalla 5
+            // por CUALQUIER camino (los botones de esa pantalla, o cualquier otra
+            // transición) para que no dispare backToStart() a destiempo sobre una
+            // sesión nueva que ya esté en curso.
+            if (screenNum !== 5) clearErrorAutoReturn();
 
             // dots: el 5 (error) no tiene dot propio, se queda en el paso 3.
             // El 6 (fuera de servicio) tampoco tiene dot — no apaga ninguno.
@@ -669,6 +679,24 @@
             document.getElementById('errorMessage').innerHTML =
                 message || 'No se pudo procesar el pago<br>verifica tu tarjeta e intenta de nuevo';
             goToScreen(5);
+            startErrorAutoReturn();
+        }
+
+        // Deja los botones "Reintentar"/"Inicio" tal cual (siguen funcionando
+        // igual si alguien los toca), pero si nadie toca nada en
+        // ERROR_AUTO_RETURN_MS, regresa sola al inicio — para que la cabina no
+        // se quede detenida en la pantalla de error esperando a que alguien la
+        // reinicie a mano.
+        function startErrorAutoReturn() {
+            clearErrorAutoReturn();
+            errorAutoReturnTimer = setTimeout(() => {
+                if (currentScreen === 5) backToStart();
+            }, ERROR_AUTO_RETURN_MS);
+        }
+
+        function clearErrorAutoReturn() {
+            if (errorAutoReturnTimer) clearTimeout(errorAutoReturnTimer);
+            errorAutoReturnTimer = null;
         }
 
         // --- Monitoreo de hardware (cámara + impresora) ----------------

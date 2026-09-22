@@ -81,10 +81,67 @@ async function createSale({ amount, orderId }) {
   return response.data;
 }
 
+// NetPay exige que la solicitud de cancelación llegue antes de las 8:00
+// p.m. hora Ciudad de México (Referencia API, sección "6. Cancelación" +
+// confirmado en claude/Guias_SDKs_Netpay.md) — restricción dura del lado de
+// ellos, no algo que podamos evitar desde acá. % 24 es por si el runtime de
+// Node en esta máquina llega a formatear la medianoche como "24" en vez de
+// "00" (varía según versión de ICU) — sin eso, medianoche se leería como
+// ">= 20" y bloquearía cancelaciones válidas de madrugada.
+function isPastCancelCutoff(now = new Date()) {
+  const hourCdmx =
+    parseInt(
+      new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/Mexico_City',
+        hour: '2-digit',
+        hour12: false,
+      }).format(now),
+      10
+    ) % 24;
+  return hourCdmx >= 20;
+}
+
+/**
+ * Cancela (reversa) una venta ya cobrada — SIEMPRE por el monto completo,
+ * NetPay no soporta cancelaciones parciales.
+ * Confirmado contra la Referencia API oficial ("6. Cancelación") y el
+ * correo de Integraciones:
+ * - Endpoint: POST {baseUrl}/integration-service/transactions/cancel
+ * - Body: { serialNumber, storeId, orderId } — este "orderId" es el que la
+ *   PROPIA terminal generó y regresó en la respuesta de la venta original
+ *   (terminalOrderId en sessionState.js / routes/webhook.js), NO nuestro
+ *   folioNumber/orderId interno que sí usa createSale().
+ * - Restricción: mismo día + antes de las 8pm CDMX (ver isPastCancelCutoff
+ *   arriba) — se revisa ANTES de llamar al endpoint para no gastar el
+ *   intento en un request que sabemos que NetPay va a rechazar, y para
+ *   poder distinguir en el log/aviso "fuera de ventana" de una falla real
+ *   de red o de la terminal.
+ * - Mismo timeout largo que createSale(): es un push a un dispositivo
+ *   físico (la terminal), no solo un servicio en la nube.
+ */
 async function cancelSale({ orderId }) {
+  if (isPastCancelCutoff()) {
+    const err = new Error(
+      'fuera de la ventana de cancelación de NetPay (después de las 8:00 p.m. hora CDMX) — requiere reverso manual'
+    );
+    err.code = 'cancel_window_closed';
+    throw err;
+  }
+
   const token = await getAccessToken();
-  // --- STUB: POST /integration-service/transactions/cancel ---
-  throw new Error('NetPay: cancelSale() no implementado todavía');
+
+  const response = await axios.post(
+    `${config.netpay.baseUrl}/integration-service/transactions/cancel`,
+    {
+      serialNumber: config.netpay.serialNumber,
+      storeId: config.netpay.storeId,
+      orderId,
+      traceability: {},
+    },
+    { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, timeout: 20000 }
+  );
+
+  return response.data;
 }
 
 async function reprintTicket({ orderId }) {

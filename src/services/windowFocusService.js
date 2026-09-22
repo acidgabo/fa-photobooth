@@ -226,9 +226,73 @@ async function tryFocus(fn, label) {
   }
 }
 
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+const FOCUS_BROWSER_RETRY_ATTEMPTS = 5;
+const FOCUS_BROWSER_RETRY_INTERVAL_MS = 2000;
+
+/**
+ * Reintenta reclamar el foco del navegador varias veces a lo largo de unos
+ * segundos, en vez de un solo intento — mitiga un caso confirmado en
+ * pruebas reales (19-sep-2026): el swap a Chrome en session_end funcionaba
+ * bien al principio, pero instantes después el foco regresaba solo a la
+ * pantalla de bloqueo de LumaBooth (sospecha: su propio modal nativo de
+ * "Cámara desconectada" sigue abierto, sin nadie que lo cierre en una
+ * cabina desatendida, y Windows se lo vuelve a traer al frente). Un solo
+ * intento no alcanza para ganarle a eso — este sí.
+ *
+ * Se usa en dos lugares: al terminar una sesión (routes/dslrbooth.js,
+ * evento session_end) y cuando el monitoreo de hardware detecta que la
+ * cámara/impresora se recuperó (src/hardwareWatch.js) — por si el foco se
+ * quedó atorado en LumaBooth más allá de la ventana de reintentos de la
+ * primera vez. Fire-and-forget, nunca bloquea a quien la llama.
+ *
+ * A diferencia de tryFocus(), no loguea cada intento (confirmado en
+ * pruebas: con dos session_end seguidos — ver nota de duplicado más abajo
+ * — eran hasta 10 líneas por sesión) — corre SIEMPRE los 5 intentos
+ * completos (el modal nativo de LumaBooth puede seguir robándose el foco
+ * después de un intento "exitoso" intermedio, así que un éxito temprano no
+ * garantiza nada) y solo deja UNA línea al final, reflejando el resultado
+ * del último intento (el que de verdad importa: el que se queda parado).
+ */
+async function tryFocusBrowserPersistent() {
+  if (!config.kiosk.windowFocusEnabled) return;
+  if (process.platform !== 'win32') {
+    console.log('[windowFocusService] focusBrowser (persistente): omitido (no es Windows)');
+    return;
+  }
+
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= FOCUS_BROWSER_RETRY_ATTEMPTS; attempt++) {
+    try {
+      await focusBrowser();
+      lastError = null;
+    } catch (err) {
+      lastError = err;
+    }
+    if (attempt < FOCUS_BROWSER_RETRY_ATTEMPTS) {
+      await delay(FOCUS_BROWSER_RETRY_INTERVAL_MS);
+    }
+  }
+
+  if (lastError) {
+    console.warn(
+      `[windowFocusService] focusBrowser (persistente): no se pudo cambiar el foco tras ${FOCUS_BROWSER_RETRY_ATTEMPTS} intentos (no bloqueante) — ${lastError.message}`
+    );
+  } else {
+    console.log(
+      `[windowFocusService] focusBrowser (persistente): foco cambiado OK (intento ${FOCUS_BROWSER_RETRY_ATTEMPTS}/${FOCUS_BROWSER_RETRY_ATTEMPTS})`
+    );
+  }
+}
+
 module.exports = {
   focusDslrbooth,
   focusBrowser,
   tryFocusDslrbooth: () => tryFocus(focusDslrbooth, 'focusDslrbooth'),
   tryFocusBrowser: () => tryFocus(focusBrowser, 'focusBrowser'),
+  tryFocusBrowserPersistent,
 };
