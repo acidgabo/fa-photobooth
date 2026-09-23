@@ -8,13 +8,66 @@ const dslrboothService = require('../services/dslrboothService');
 const directBoothService = require('../services/directBoothService');
 const windirectBoothService = require('../services/windirectBoothService');
 const windowFocusService = require('../services/windowFocusService');
-const { autoCancelSale } = require('../services/autoCancelService');
+const { autoCancelSale, resolveCancelResult } = require('../services/autoCancelService');
 
 // Registro en archivo aparte de los cobros huérfanos (ver COBRO HUÉRFANO más
 // abajo) — para que quede constancia aunque nadie esté viendo la consola en
 // el momento que pasa. "*.log" ya está en .gitignore, así que este archivo
 // nunca se sube al repo (son datos operativos/sensibles, no código).
 const ORPHAN_LOG_PATH = path.join(__dirname, '..', '..', 'logs', 'cobros-huerfanos.log');
+
+// Bitácora de TODAS las respuestas que manda la terminal (ventas,
+// cancelaciones y reimpresiones), una línea JSON por evento — cubre el
+// requisito de certificación de NetPay "Implementación de logging en el
+// punto de venta" y deja evidencia consultable después sin depender de
+// NETPAY_DEBUG_LOG. Solo campos útiles para conciliar; nada de datos
+// sensibles de la tarjeta (cardNumber ya son solo los últimos 4).
+const TRANSACTIONS_LOG_PATH = path.join(__dirname, '..', '..', 'logs', 'netpay-transacciones.log');
+const LOGGED_FIELDS = [
+  'transType', 'isRePrint', 'reprintModule', 'responseCode', 'message', 'folioNumber', 'orderId',
+  'amount', 'authCode', 'cardNumber', 'transactionId', 'rrnNumber', 'transDate',
+];
+
+function logTransaction(kind, body) {
+  try {
+    const entry = { at: new Date().toISOString(), kind };
+    for (const field of LOGGED_FIELDS) {
+      if (body[field] !== undefined) entry[field] = body[field];
+    }
+    fs.mkdirSync(path.dirname(TRANSACTIONS_LOG_PATH), { recursive: true });
+    fs.appendFileSync(TRANSACTIONS_LOG_PATH, `${JSON.stringify(entry)}\n`);
+  } catch (err) {
+    console.error(`[webhook] no se pudo escribir en ${TRANSACTIONS_LOG_PATH}: ${err.message}`);
+  }
+}
+
+// Qué tipo de respuesta mandó la terminal. Se decide ANTES de comparar
+// contra la sesión activa, porque el mismo endpoint recibe tres cosas
+// distintas (Referencia API, "9. Recibiendo la respuesta"):
+// - Reimpresión: isRePrint === true. Va primero porque la reimpresión de
+//   una cancelación también trae transType "V".
+// - Cancelación: transType === "V".
+// - Venta: todo lo demás (transType "A", o el payload viejo del mock sin
+//   transType).
+// Sin esta separación, la respuesta de una cancelación o reimpresión con
+// responseCode "00" se confundía con un pago: o se registraba como COBRO
+// HUÉRFANO (si ya no había sesión), o peor, arrancaba una sesión de fotos
+// (si la sesión seguía en awaiting_payment con el mismo folio).
+function classifyTerminalResponse(body) {
+  if (body.isRePrint === true || body.isRePrint === 'true') return 'reprint';
+  if (body.transType === 'V') return 'cancel';
+  return 'sale';
+}
+
+function handleReprintResponse(body) {
+  // Por ahora solo se registra. El manejo de reversos (reprintModule
+  // "RV"/"PRV", voucher personalizado, folios pendientes) se construye
+  // encima de esto en el siguiente paso.
+  console.log(
+    `[webhook] respuesta de REIMPRESIÓN — folio=${body.folioNumber} orderId=${body.orderId} ` +
+      `responseCode=${body.responseCode} reprintModule=${body.reprintModule || '(ninguno)'} message="${body.message}"`
+  );
+}
 
 function logOrphanCharge(detail) {
   try {
@@ -62,6 +115,20 @@ router.post('/netpay', async (req, res) => {
     console.log('[webhook] body completo recibido de Netpay:', JSON.stringify(req.body, null, 2));
   }
 
+  const kind = classifyTerminalResponse(req.body);
+  logTransaction(kind, req.body);
+
+  if (kind === 'reprint') {
+    handleReprintResponse(req.body);
+    return res.status(200).json(NETPAY_ACK);
+  }
+
+  if (kind === 'cancel') {
+    resolveCancelResult(req.body);
+    return res.status(200).json(NETPAY_ACK);
+  }
+
+  // --- De aquí en adelante: respuesta de una VENTA ---
   const { folioNumber, orderId: terminalOrderId, responseCode, message: netpayMessage } = req.body;
 
   const current = sessionState.get();
@@ -122,7 +189,7 @@ router.post('/netpay', async (req, res) => {
       sessionState.set({ status: 'error', error: `booth directo: ${err.message}` });
       // Grupo 2 de la taxonomía de fallas: el cobro ya se hizo y toda la
       // sesión (captura + impresión) truena — cero fotos entregadas.
-      autoCancelSale(terminalOrderId, `booth directo: ${err.message}`);
+      autoCancelSale(terminalOrderId, `booth directo: ${err.message}`, { folioNumber });
     });
   } else if (config.booth.mode === 'windirect') {
     // Modo demo (Windows): cámara/impresora reales, controladas por este
@@ -132,7 +199,7 @@ router.post('/netpay', async (req, res) => {
     sessionState.set({ status: 'booth_running' });
     windirectBoothService.runDirectSession().catch((err) => {
       sessionState.set({ status: 'error', error: `booth directo (Windows): ${err.message}` });
-      autoCancelSale(terminalOrderId, `booth directo (Windows): ${err.message}`);
+      autoCancelSale(terminalOrderId, `booth directo (Windows): ${err.message}`, { folioNumber });
     });
   } else {
     try {
@@ -155,7 +222,7 @@ router.post('/netpay', async (req, res) => {
       // session_start — cero fotos, cero interacción del cliente. Candidato
       // limpio para cancelar automáticamente (ver docs del proyecto).
       // Fire-and-forget: nunca debe tirar el manejo del webhook si falla.
-      autoCancelSale(terminalOrderId, `dslrBooth: ${err.message}`);
+      autoCancelSale(terminalOrderId, `dslrBooth: ${err.message}`, { folioNumber });
     }
   }
 

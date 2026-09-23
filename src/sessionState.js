@@ -112,7 +112,7 @@ function armWatchdog() {
     // huérfano" en routes/webhook.js para ese otro caso, que sí puede
     // implicar dinero cobrado pero requiere revisión manual).
     if (armedForStatus === 'booth_running') {
-      autoCancelSale(armedForTerminalOrderId, WATCHDOG_ERROR[armedForStatus]);
+      autoCancelSale(armedForTerminalOrderId, WATCHDOG_ERROR[armedForStatus], { folioNumber: armedForOrderId });
     }
   }, timeoutMs);
 }
@@ -220,7 +220,7 @@ async function handleSessionEndWithoutPrinting({ orderId, package: pkg, terminal
         console.warn(
           `[sessionState] session_end sin "printing" Y cámara confirmada ausente — cancelando automáticamente (${detail})`
         );
-        autoCancelSale(terminalOrderId, `session_end sin printing, cámara ausente (${detail})`);
+        autoCancelSale(terminalOrderId, `session_end sin printing, cámara ausente (${detail})`, { folioNumber: orderId });
         return;
       }
     } catch (err) {
@@ -259,7 +259,8 @@ async function handlePostPrintCheck({ orderId, package: pkg, terminalOrderId }) 
 
     autoCancelSale(
       terminalOrderId,
-      `impresión fallida (${result.detail}, ${result.pendingJobs} trabajo(s) en cola) — ${detail}`
+      `impresión fallida (${result.detail}, ${result.pendingJobs} trabajo(s) en cola) — ${detail}`,
+      { folioNumber: orderId }
     );
 
     const cleared = await windowsPrinterService.clearPrintQueue();
