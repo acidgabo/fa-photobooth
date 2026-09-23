@@ -146,6 +146,70 @@ Write-Output ("DetectedErrorState=" + $p.DetectedErrorState)
   }
 }
 
+// Cuántos trabajos hay ahora mismo en la cola de Windows para la impresora
+// configurada. Win32_PrintJob.Name viene en formato "NombreImpresora,JobId"
+// — de ahí el filtro LIKE 'NombreImpresora,%'. Usado SOLO para el chequeo
+// post-sesión de src/sessionState.js (confirmar que una impresión
+// realmente no salió) — nunca gatea pagos por sí solo, siempre se combina
+// con getPrinterStatus() (ver hardwareMonitorService.js#checkPrintFailure).
+async function getPendingJobCount() {
+  if (!config.printer.name) return 0;
+
+  const psPrinter = psQuote(config.printer.name);
+  const script = `
+$ErrorActionPreference = 'Stop'
+$jobs = Get-CimInstance -ClassName Win32_PrintJob -Filter "Name LIKE '${psPrinter},%'"
+Write-Output ("COUNT=" + (@($jobs)).Count)
+`.trim();
+
+  try {
+    const { stdout } = await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script]);
+    const match = stdout.match(/COUNT=(\d+)/);
+    return match ? parseInt(match[1], 10) : 0;
+  } catch (err) {
+    console.error('[windowsPrinterService] getPendingJobCount falló:', err.message, err.stderr);
+    return 0; // ante la duda de la consulta, no bloquear la decisión con un falso positivo
+  }
+}
+
+// Cancela/remueve todos los trabajos pendientes de la impresora configurada
+// — se usa cuando ya se confirmó que una impresión falló (getPrinterStatus
+// con problema + un trabajo seguía en cola) y la venta correspondiente se
+// va a cancelar: evita que ese trabajo salga impreso solo más tarde, cuando
+// la impresora se reconecte, para una venta que ya no existe.
+async function clearPrintQueue() {
+  if (!config.printer.name) return { cleared: 0 };
+
+  const psPrinter = psQuote(config.printer.name);
+  const script = `
+$ErrorActionPreference = 'Stop'
+$jobs = Get-CimInstance -ClassName Win32_PrintJob -Filter "Name LIKE '${psPrinter},%'"
+$count = 0
+foreach ($j in $jobs) {
+  try {
+    Remove-CimInstance -InputObject $j -ErrorAction Stop
+    $count++
+  } catch {
+    # seguimos con los demás aunque uno en particular no se pueda remover
+  }
+}
+Write-Output ("CLEARED=" + $count)
+`.trim();
+
+  try {
+    const { stdout } = await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script]);
+    const match = stdout.match(/CLEARED=(\d+)/);
+    const cleared = match ? parseInt(match[1], 10) : 0;
+    console.log(
+      `[windowsPrinterService] cola de impresión limpiada — ${cleared} trabajo(s) removido(s) de "${config.printer.name}"`
+    );
+    return { cleared };
+  } catch (err) {
+    console.error('[windowsPrinterService] clearPrintQueue falló:', err.message, err.stderr);
+    return { cleared: 0, error: err.message };
+  }
+}
+
 async function printPhoto(filePath) {
   if (!config.printer.name) {
     throw new Error(
@@ -208,4 +272,4 @@ try {
   return { copies };
 }
 
-module.exports = { listPrinters, printPhoto, getPrinterStatus };
+module.exports = { listPrinters, printPhoto, getPrinterStatus, getPendingJobCount, clearPrintQueue };

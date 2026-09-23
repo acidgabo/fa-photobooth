@@ -21,6 +21,7 @@ const config = require('./config');
 const sessionState = require('./sessionState');
 const hardwareMonitorService = require('./services/hardwareMonitorService');
 const notifyService = require('./services/notifyService');
+const windowFocusService = require('./services/windowFocusService');
 
 let current = { ok: true, reasons: [], checkedAt: null };
 let loopTimer = null;
@@ -39,6 +40,16 @@ function applyResult(result) {
   } else if (!wasOk && result.ok) {
     console.log('[hardwareWatch] hardware recuperado — cabina de vuelta en servicio');
     notifyService.notifyHardwareRecovered();
+
+    // Red de seguridad extra: si el foco se quedó atorado en LumaBooth (ver
+    // tryFocusBrowserPersistent en windowFocusService.js — el intento en
+    // session_end pudo no haber ganado, o la sesión ni siquiera llegó a
+    // terminar bien), reintentarlo también aquí, ahora que confirmamos que
+    // el hardware ya responde de nuevo. Solo aplica en BOOTH_MODE=dslrbooth
+    // (el único que usa el swap de foco con LumaBooth).
+    if (config.booth.mode === 'dslrbooth') {
+      windowFocusService.tryFocusBrowserPersistent();
+    }
   }
 
   return current;

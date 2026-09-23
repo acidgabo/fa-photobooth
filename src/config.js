@@ -137,7 +137,7 @@ module.exports = {
     // captura). Antes de aceptar un pago (POST /api/pay) SIEMPRE se hace
     // además un chequeo síncrono fresco, así que este intervalo es solo
     // para poder avisar (Discord) ANTES de que llegue un cliente.
-    idlePollIntervalMs: parseInt(process.env.HARDWARE_IDLE_POLL_MS || '30000', 10),
+    idlePollIntervalMs: parseInt(process.env.HARDWARE_IDLE_POLL_MS || '15000', 10),
     // Cadencia acelerada mientras la cabina está marcada "fuera de
     // servicio": para detectar la recuperación (p.ej. alguien reconectó la
     // cámara o destrabó la impresora) y reabrir la cabina solo, sin
