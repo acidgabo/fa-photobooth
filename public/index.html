@@ -161,6 +161,39 @@
             gap: clamp(2px, 0.4vw, 6px);
         }
 
+        /* Par de tiras de muestra (blanca + negra), en abanico, igual que
+           el mockup "ELIGE TU PAQUETE" — son las mismas fotos de stock que
+           Karen usa en sus plantillas de impresión (img/strips/), aquí
+           solo como vista previa de lo que imprime cada paquete. Fotos
+           reescaladas/comprimidas de sus PNG originales (591×1772, ~1.2MB
+           c/u) a JPG de 300px de ancho para no inflar el peso de la
+           pantalla táctil. */
+        .package-strips {
+            display: flex;
+            justify-content: center;
+            align-items: flex-end;
+            margin-bottom: clamp(4px, 0.8vw, 10px);
+        }
+
+        .package-strip {
+            width: clamp(64px, 7vw, 108px);
+            height: auto;
+            border-radius: 2px;
+            box-shadow: 0 6px 14px rgba(0,0,0,0.18);
+        }
+
+        .package-strip--white {
+            transform: rotate(-7deg);
+            position: relative;
+            z-index: 1;
+        }
+
+        .package-strip--black {
+            transform: rotate(7deg);
+            margin-left: clamp(-18px, -2vw, -10px);
+            z-index: 2;
+        }
+
         /* "2 tiras / X tomas": etiqueta arriba del círculo, no adentro —
            el óvalo de Karen (img/circulo.png) es muy aplanado (~2.46:1,
            medido de su propio bounding box) para meter 3 líneas sin que
@@ -416,8 +449,10 @@
         let packagesCache = [];
         let paymentMock = false;  // GET /api/config decide esto antes de que se pueda pagar
         let paymentInFlight = false;  // guard contra doble submit en selectPackage()
+        let errorAutoReturnTimer = null;  // 30s en pantalla de error sin tocar nada → regresa sola al inicio
 
         const PAYMENT_TIMEOUT_MS = 30000;
+        const ERROR_AUTO_RETURN_MS = 30000;
 
         async function api(path, options) {
             const res = await fetch(path, options);
@@ -430,6 +465,14 @@
             currentScreen = screenNum;
             document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
             document.querySelector('[data-screen="' + screenNum + '"]').classList.add('active');
+
+            // Regreso automático al inicio desde la pantalla de error (ver
+            // showError()/startErrorAutoReturn()) si nadie toca ningún botón en
+            // ERROR_AUTO_RETURN_MS. Se cancela en cuanto se sale de la pantalla 5
+            // por CUALQUIER camino (los botones de esa pantalla, o cualquier otra
+            // transición) para que no dispare backToStart() a destiempo sobre una
+            // sesión nueva que ya esté en curso.
+            if (screenNum !== 5) clearErrorAutoReturn();
 
             // dots: el 5 (error) no tiene dot propio, se queda en el paso 3.
             // El 6 (fuera de servicio) tampoco tiene dot — no apaga ninguno.
@@ -472,16 +515,22 @@
                 el.innerHTML = '<p class="status-message">No se pudo cargar el catálogo: ' + err.message + '</p>';
                 return;
             }
-            // Tarjeta = etiqueta "2 tiras / X tomas" arriba + el precio
-            // encerrado en el círculo dibujado a mano de Karen (ver
-            // .package-circle) — el óvalo real es muy aplanado (~2.46:1)
-            // para meter las 3 líneas sin que se salgan, así que solo el
-            // precio va adentro. El nombre del paquete (p.name) no se
-            // muestra porque el diseño de Karen no lo contempla.
+            // Tarjeta = par de tiras de muestra (blanca de 3 tomas +
+            // negra de 4 tomas, ver img/strips/) + "2 tiras" + el precio
+            // encerrado en el círculo de Karen (ver .package-circle).
+            // Desde el 22-sep-2026 es un solo paquete ($120) que no fija
+            // 3 o 4 tomas — Karen pidió dejar las dos tiras de muestra
+            // juntas en vez de separarlas en dos paquetes con precio
+            // distinto (como estaba antes). Por eso las imágenes van
+            // fijas aquí, no derivadas de packagesCache — si en el futuro
+            // vuelve a haber más de un paquete, esto necesita repensarse.
             el.innerHTML = packagesCache.map(p =>
                 '<div class="package" onclick="selectPackage(\'' + p.id + '\')">' +
+                    '<div class="package-strips">' +
+                        '<img class="package-strip package-strip--white" src="img/strips/blanco3.jpg" alt="">' +
+                        '<img class="package-strip package-strip--black" src="img/strips/negro4.jpg" alt="">' +
+                    '</div>' +
                     '<div class="package-label">2 tiras</div>' +
-                    '<div class="package-label">' + p.photos + ' tomas</div>' +
                     '<div class="package-circle">' +
                         '<div class="package-price">$' + p.price + ' MXN</div>' +
                     '</div>' +
@@ -515,8 +564,11 @@
             paymentInFlight = true;
             setPackagesDisabled(true);
 
+            // Ya no incluye conteo de fotos (currentPackage.photos) — desde
+            // que es un solo paquete sin 3/4 tomas fijas, ese campo se quitó
+            // de packages.js (ver comentario ahí).
             document.getElementById('packageSelected').textContent =
-                currentPackage.name + ' - $' + currentPackage.price + ' MXN - ' + currentPackage.photos + ' fotos';
+                currentPackage.name + ' - $' + currentPackage.price + ' MXN';
 
             try {
                 const result = await api('/api/pay', {
@@ -690,7 +742,7 @@
                 if (match) {
                     currentPackage = match;
                     document.getElementById('packageSelected').textContent =
-                        match.name + ' - $' + match.price + ' MXN - ' + match.photos + ' fotos';
+                        match.name + ' - $' + match.price + ' MXN';
                 }
             }
 
@@ -741,6 +793,24 @@
             document.getElementById('errorMessage').innerHTML =
                 message || 'No se pudo procesar el pago<br>verifica tu tarjeta e intenta de nuevo';
             goToScreen(5);
+            startErrorAutoReturn();
+        }
+
+        // Deja los botones "Reintentar"/"Inicio" tal cual (siguen funcionando
+        // igual si alguien los toca), pero si nadie toca nada en
+        // ERROR_AUTO_RETURN_MS, regresa sola al inicio — para que la cabina no
+        // se quede detenida en la pantalla de error esperando a que alguien la
+        // reinicie a mano.
+        function startErrorAutoReturn() {
+            clearErrorAutoReturn();
+            errorAutoReturnTimer = setTimeout(() => {
+                if (currentScreen === 5) backToStart();
+            }, ERROR_AUTO_RETURN_MS);
+        }
+
+        function clearErrorAutoReturn() {
+            if (errorAutoReturnTimer) clearTimeout(errorAutoReturnTimer);
+            errorAutoReturnTimer = null;
         }
 
         // --- Monitoreo de hardware (cámara + impresora) ----------------

@@ -4,19 +4,19 @@
  * realmente se cobra SIEMPRE se busca aquí en el backend a partir del
  * packageId — nunca se confía en un monto que mande el navegador.
  *
- * Para personalizar: edita este archivo (nombre, precio, fotos). No hay
- * que tocar nada más — el frontend pinta lo que haya aquí.
+ * Para personalizar: edita este archivo (nombre, precio). No hay que
+ * tocar nada más — el frontend pinta lo que haya aquí.
  *
- * Actualizado 21-sep-2026 al aplicar el diseño de Karen (mockup "ELIGE TU
- * PAQUETE" compartido por WhatsApp/Drive): pasa de 1 paquete único
- * (PREMIUM $120, 6 fotos) a los 2 paquetes de su mockup — "2 tiras" es
- * fijo en las dos opciones (lo pinta el frontend), por eso no es un campo
- * aquí. CONFIRMAR CON GABO/KAREN antes de comitear: este cambio afecta lo
- * que se cobra de verdad.
+ * Actualizado 22-sep-2026: Karen pidió volver a un solo paquete ($120,
+ * "2 tiras", sin fijar 3 o 4 tomas) después de ver el mockup con 2
+ * paquetes — le gustó el resultado visual y pidió dejar las dos tiras de
+ * muestra (3 y 4 fotos) en la misma tarjeta en vez de separarlas en dos
+ * paquetes con precios distintos. Por eso ya no hay un campo "photos"
+ * aquí: las imágenes de las tiras (blanco3.jpg / negro4.jpg) quedaron
+ * fijas en public/index.html, no derivadas del catálogo.
  */
 const PACKAGES = [
-  { id: 'paquete-3-tomas', name: '3 TOMAS', price: 100, photos: 3 },
-  { id: 'paquete-4-tomas', name: '4 TOMAS', price: 130, photos: 4 },
+  { id: 'premium', name: 'PREMIUM', price: 120 },
 ];
 
 function getAll() {
