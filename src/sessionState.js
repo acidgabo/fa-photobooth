@@ -42,6 +42,11 @@ let state = {
   // ALGÚN momento de la sesión actual? Se usa solo como señal en
   // recordBoothEvent() al llegar "session_end" — ver el comentario ahí.
   sawPrintingEvent: false,
+  // dslrBooth a veces manda el Trigger "session_end" DOS VECES seguidas
+  // para la misma sesión (confirmado en pruebas reales, 22-sep-2026). Este
+  // guard evita procesar el bloque de Grupo 4 (cancelación automática,
+  // limpieza de cola) más de una vez por sesión — ver recordBoothEvent().
+  sessionEndHandled: false,
 };
 
 // --- Watchdog de sesión colgada -------------------------------------
@@ -133,6 +138,7 @@ function reset() {
     updatedAt: new Date().toISOString(),
     error: null,
     sawPrintingEvent: false,
+    sessionEndHandled: false,
   };
   return state;
 }
@@ -149,6 +155,7 @@ function recordBoothEvent(eventType, param1, param2) {
     // en false — defensivo por si algún día dos sesiones llegaran a
     // solaparse más de cerca de lo que hoy permite el flujo.
     updates.sawPrintingEvent = false;
+    updates.sessionEndHandled = false;
   } else if (eventType === 'printing') {
     updates.sawPrintingEvent = true;
   }
@@ -156,6 +163,20 @@ function recordBoothEvent(eventType, param1, param2) {
   set(updates);
 
   if (eventType === 'session_end') {
+    // dslrBooth a veces manda "session_end" DOS VECES seguidas para la
+    // misma sesión — confirmado en pruebas reales (22-sep-2026): se veían
+    // dos intentos de cancelación automática (y, en el caso de impresora,
+    // dos limpiezas de cola) para el mismo terminalOrderId. El resto de
+    // los efectos del duplicado (lockscreen, swap de foco en
+    // routes/dslrbooth.js) son inofensivos porque dslrBooth/Windows los
+    // manejan de forma idempotente, pero el bloque de abajo SÍ dispara
+    // acciones reales (cancelSale, limpiar cola) que no deben correr dos
+    // veces por la misma sesión — de ahí este guard.
+    if (state.sessionEndHandled) {
+      return;
+    }
+    set({ sessionEndHandled: true });
+
     // Capturamos estos datos AHORA — reset() (1.5s más abajo) los borra, y
     // el chequeo de impresión corre 5s después, así que para entonces ya
     // no quedaría nada de esto en `state`.
