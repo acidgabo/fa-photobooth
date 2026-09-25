@@ -67,10 +67,66 @@ function notifyAutoCancelFailed(detail) {
   return notifyDiscord(`🔴 Cancelación automática de venta FALLÓ — revisar y reversar a mano\nDetalles: ${detail}`);
 }
 
+// Aviso de que una cancelación automática SÍ se aplicó: la terminal
+// confirmó la cancelación (webhook transType "V" con responseCode "00") y el
+// cargo se le devolvió al cliente. Informativo — no requiere acción, pero
+// deja constancia en el canal de cada venta que se cobró y se regresó.
+function notifyAutoCancelConfirmed(detail) {
+  return notifyDiscord(`↩️ Venta cancelada automáticamente — cargo devuelto al cliente\nDetalles: ${detail}`);
+}
+
+// Aviso de una cancelación que llegó de la terminal pero no corresponde a
+// ninguna cancelación automática pendiente (p. ej. alguien canceló a mano
+// desde la terminal, o se reinició el backend entre el envío y la
+// respuesta). Informativo, para que no pase desapercibida.
+function notifyUnmatchedCancel(detail) {
+  return notifyDiscord(`⚠️ Cancelación recibida de la terminal que no fue automática — revisar\nDetalles: ${detail}`);
+}
+
+// --- Reversos (ver src/services/reversalService.js) -------------------
+
+// La terminal confirmó (reimpresión por folio → reprintModule "RV") que
+// un cobro autorizado se deshizo solo. Informativo — el cliente no quedó
+// cobrado.
+function notifyReversalConfirmed(detail) {
+  return notifyDiscord(`↩️ Reverso confirmado — el cobro no se aplicó al cliente\nDetalles: ${detail}`);
+}
+
+// Venta "pendiente por reversar" (PRV): el cobro sigue autorizado hasta
+// que la terminal complete otra venta exitosa. Se reconsulta sola; si no
+// se resuelve, requiere seguimiento con NetPay.
+function notifyReversalPending(detail) {
+  return notifyDiscord(`🟠 Venta pendiente por reversar — revisar si no se resuelve\nDetalles: ${detail}`);
+}
+
+// No se pudo saber cómo quedó una venta (la terminal no respondió a la
+// consulta). Puede haber un cobro sin servicio — se reintenta solo.
+function notifyReversalUnknown(detail) {
+  return notifyDiscord(`🟠 No se pudo confirmar el estado de una venta — posible cobro sin servicio\nDetalles: ${detail}`);
+}
+
+// Un folio que habíamos marcado como pendiente resultó no existir en la
+// terminal (la venta nunca le llegó) — no hubo cobro, se cierra el aviso.
+function notifyReversalNotFound(detail) {
+  return notifyDiscord(`✅ Venta pendiente resuelta — no hubo cobro\nDetalles: ${detail}`);
+}
+
+// La consulta regresó algo que no cuadra con lo que sabíamos de la venta.
+function notifyReversalMismatch(detail) {
+  return notifyDiscord(`🔴 Estado de venta inesperado — revisar a mano\nDetalles: ${detail}`);
+}
+
 module.exports = {
   notifyDiscord,
   notifyHardwareDown,
   notifyHardwareRecovered,
   notifySessionLikelyIncomplete,
   notifyAutoCancelFailed,
+  notifyAutoCancelConfirmed,
+  notifyUnmatchedCancel,
+  notifyReversalConfirmed,
+  notifyReversalPending,
+  notifyReversalUnknown,
+  notifyReversalMismatch,
+  notifyReversalNotFound,
 };
