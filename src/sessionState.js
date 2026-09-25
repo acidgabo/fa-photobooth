@@ -1,6 +1,7 @@
 const config = require('./config');
 const notifyService = require('./services/notifyService');
 const { autoCancelSale } = require('./services/autoCancelService');
+const reversalService = require('./services/reversalService');
 // Ninguno de estos dos depende de sessionState.js (a diferencia de
 // hardwareWatch.js, que sí lo requiere) — por eso se puede llamar directo
 // desde aquí sin crear una dependencia circular.
@@ -108,11 +109,21 @@ function armWatchdog() {
     // NetPay confirmó el pago) y la sesión se colgó a medio camino sin
     // terminar — candidato limpio para cancelar automáticamente. No aplica
     // a "awaiting_payment": ahí nunca llegó el webhook de NetPay, así que
-    // no hay terminalOrderId con qué cancelar (ver el manejo de "cobro
-    // huérfano" en routes/webhook.js para ese otro caso, que sí puede
-    // implicar dinero cobrado pero requiere revisión manual).
+    // no hay terminalOrderId con qué cancelar — ese caso se cubre abajo
+    // con la consulta por folio.
     if (armedForStatus === 'booth_running') {
       autoCancelSale(armedForTerminalOrderId, WATCHDOG_ERROR[armedForStatus], { folioNumber: armedForOrderId });
+    }
+
+    // Venció la espera del pago sin ninguna respuesta de la terminal: la
+    // venta pudo quedar cobrada (webhook perdido) o a medio reversar
+    // (terminal apagada a media venta = reverso manual). No tenemos el
+    // orderId de la terminal, pero sí nuestro folio — se consulta su
+    // estado por reimpresión por folio (ver reversalService: si resulta
+    // aprobada, se cancela automáticamente; si queda PRV, se da
+    // seguimiento).
+    if (armedForStatus === 'awaiting_payment') {
+      reversalService.checkFolio(armedForOrderId, 'payment_timeout');
     }
   }, timeoutMs);
 }

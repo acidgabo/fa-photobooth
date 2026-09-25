@@ -37,7 +37,12 @@ async function getAccessToken() {
       Authorization: `Basic ${config.netpay.authString}`,
       'Content-Type': 'application/x-www-form-urlencoded',
     },
-    timeout: 5000, // sin esto, una URL mal configurada o caída se cuelga en silencio
+    // 15s: con 5s se vio fallar la PRIMERA petición de token en pruebas reales
+    // (24-sep-2026, "timeout of 5000ms exceeded" con el servidor OAuth de
+    // NetPay lento) — posible causa de parte de los timeouts intermitentes
+    // del 16-sep. Sigue acotado para que una URL mal configurada no se
+    // cuelgue en silencio.
+    timeout: 15000,
   });
 
   cachedToken = response.data.access_token;

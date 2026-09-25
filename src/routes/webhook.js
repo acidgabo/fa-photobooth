@@ -9,6 +9,7 @@ const directBoothService = require('../services/directBoothService');
 const windirectBoothService = require('../services/windirectBoothService');
 const windowFocusService = require('../services/windowFocusService');
 const { autoCancelSale, resolveCancelResult } = require('../services/autoCancelService');
+const reversalService = require('../services/reversalService');
 
 // Registro en archivo aparte de los cobros huérfanos (ver COBRO HUÉRFANO más
 // abajo) — para que quede constancia aunque nadie esté viendo la consola en
@@ -57,16 +58,6 @@ function classifyTerminalResponse(body) {
   if (body.isRePrint === true || body.isRePrint === 'true') return 'reprint';
   if (body.transType === 'V') return 'cancel';
   return 'sale';
-}
-
-function handleReprintResponse(body) {
-  // Por ahora solo se registra. El manejo de reversos (reprintModule
-  // "RV"/"PRV", voucher personalizado, folios pendientes) se construye
-  // encima de esto en el siguiente paso.
-  console.log(
-    `[webhook] respuesta de REIMPRESIÓN — folio=${body.folioNumber} orderId=${body.orderId} ` +
-      `responseCode=${body.responseCode} reprintModule=${body.reprintModule || '(ninguno)'} message="${body.message}"`
-  );
 }
 
 function logOrphanCharge(detail) {
@@ -119,7 +110,8 @@ router.post('/netpay', async (req, res) => {
   logTransaction(kind, req.body);
 
   if (kind === 'reprint') {
-    handleReprintResponse(req.body);
+    // Consulta de estado / manejo de reversos — ver reversalService.
+    reversalService.handleReprintResponse(req.body);
     return res.status(200).json(NETPAY_ACK);
   }
 
@@ -173,10 +165,19 @@ router.post('/netpay', async (req, res) => {
   if (responseCode !== '00') {
     console.log(`[webhook] pago rechazado (folioNumber: ${folioNumber}, responseCode: ${responseCode}, message: ${netpayMessage})`);
     sessionState.set({ status: 'error', error: netpayMessage || `responseCode ${responseCode}` });
+    // Una venta declinada puede esconder un reverso: el banco autorizó y
+    // la comunicación se cortó (p.ej. "05 Error al leer tarjeta" → la
+    // reimpresión confirmó "RV", 24-sep-2026). Se consulta el folio para
+    // confirmar que no quedó ningún cobro vigente. Fire-and-forget.
+    reversalService.checkFolio(folioNumber, 'declined', `${responseCode} ${netpayMessage || ''}`.trim());
     return res.status(200).json(NETPAY_ACK);
   }
 
   sessionState.set({ status: 'payment_confirmed', terminalOrderId });
+
+  // Una venta exitosa es lo que hace que la terminal complete los
+  // reversos pendientes (PRV) — se reconsultan después de un margen.
+  reversalService.scheduleRecheck();
 
   if (config.booth.mode === 'direct') {
     // Modo demo (Linux): cámara/impresora reales, controladas por este

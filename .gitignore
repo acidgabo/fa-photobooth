@@ -8,6 +8,9 @@ node_modules/
 # Fotos capturadas en modo direct/windirect (contenido generado en runtime)
 captures/
 
+# Estado operativo en runtime (folios pendientes por reversar, etc.)
+data/
+
 # Logs
 npm-debug.log*
 *.log

@@ -83,6 +83,33 @@ function notifyUnmatchedCancel(detail) {
   return notifyDiscord(`⚠️ Cancelación recibida de la terminal que no fue automática — revisar\nDetalles: ${detail}`);
 }
 
+// --- Reversos (ver src/services/reversalService.js) -------------------
+
+// La terminal confirmó (reimpresión por folio → reprintModule "RV") que
+// un cobro autorizado se deshizo solo. Informativo — el cliente no quedó
+// cobrado.
+function notifyReversalConfirmed(detail) {
+  return notifyDiscord(`↩️ Reverso confirmado — el cobro no se aplicó al cliente\nDetalles: ${detail}`);
+}
+
+// Venta "pendiente por reversar" (PRV): el cobro sigue autorizado hasta
+// que la terminal complete otra venta exitosa. Se reconsulta sola; si no
+// se resuelve, requiere seguimiento con NetPay.
+function notifyReversalPending(detail) {
+  return notifyDiscord(`🟠 Venta pendiente por reversar — revisar si no se resuelve\nDetalles: ${detail}`);
+}
+
+// No se pudo saber cómo quedó una venta (la terminal no respondió a la
+// consulta). Puede haber un cobro sin servicio — se reintenta solo.
+function notifyReversalUnknown(detail) {
+  return notifyDiscord(`🟠 No se pudo confirmar el estado de una venta — posible cobro sin servicio\nDetalles: ${detail}`);
+}
+
+// La consulta regresó algo que no cuadra con lo que sabíamos de la venta.
+function notifyReversalMismatch(detail) {
+  return notifyDiscord(`🔴 Estado de venta inesperado — revisar a mano\nDetalles: ${detail}`);
+}
+
 module.exports = {
   notifyDiscord,
   notifyHardwareDown,
@@ -91,4 +118,8 @@ module.exports = {
   notifyAutoCancelFailed,
   notifyAutoCancelConfirmed,
   notifyUnmatchedCancel,
+  notifyReversalConfirmed,
+  notifyReversalPending,
+  notifyReversalUnknown,
+  notifyReversalMismatch,
 };
