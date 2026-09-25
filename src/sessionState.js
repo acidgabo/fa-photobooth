@@ -163,6 +163,19 @@ function recordBoothEvent(eventType, param1, param2) {
   set(updates);
 
   if (eventType === 'session_end') {
+    // dslrBooth también manda "session_end" cuando NO hay ninguna sesión
+    // nuestra en curso — confirmado en pruebas reales (24-sep-2026): llega
+    // uno al arrancar el backend, con la cabina en idle, y disparaba el
+    // aviso "Sesión cerrada sin confirmar impresión" con orderId="?". Sin
+    // orderId no hubo cobro, así que no hay nada que revisar ni cancelar
+    // (y si la cámara estuviera desconectada en ese momento, habría
+    // intentado una cancelación sin terminalOrderId). El lockscreen/foco de
+    // routes/dslrbooth.js sí se sigue aplicando — eso es inofensivo.
+    if (!state.orderId) {
+      console.log('[sessionState] session_end sin sesión activa (sin orderId) — se ignora');
+      return;
+    }
+
     // dslrBooth a veces manda "session_end" DOS VECES seguidas para la
     // misma sesión — confirmado en pruebas reales (22-sep-2026): se veían
     // dos intentos de cancelación automática (y, en el caso de impresora,

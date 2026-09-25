@@ -67,10 +67,28 @@ function notifyAutoCancelFailed(detail) {
   return notifyDiscord(`🔴 Cancelación automática de venta FALLÓ — revisar y reversar a mano\nDetalles: ${detail}`);
 }
 
+// Aviso de que una cancelación automática SÍ se aplicó: la terminal
+// confirmó la cancelación (webhook transType "V" con responseCode "00") y el
+// cargo se le devolvió al cliente. Informativo — no requiere acción, pero
+// deja constancia en el canal de cada venta que se cobró y se regresó.
+function notifyAutoCancelConfirmed(detail) {
+  return notifyDiscord(`↩️ Venta cancelada automáticamente — cargo devuelto al cliente\nDetalles: ${detail}`);
+}
+
+// Aviso de una cancelación que llegó de la terminal pero no corresponde a
+// ninguna cancelación automática pendiente (p. ej. alguien canceló a mano
+// desde la terminal, o se reinició el backend entre el envío y la
+// respuesta). Informativo, para que no pase desapercibida.
+function notifyUnmatchedCancel(detail) {
+  return notifyDiscord(`⚠️ Cancelación recibida de la terminal que no fue automática — revisar\nDetalles: ${detail}`);
+}
+
 module.exports = {
   notifyDiscord,
   notifyHardwareDown,
   notifyHardwareRecovered,
   notifySessionLikelyIncomplete,
   notifyAutoCancelFailed,
+  notifyAutoCancelConfirmed,
+  notifyUnmatchedCancel,
 };

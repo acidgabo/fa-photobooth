@@ -117,6 +117,10 @@ function resolveCancelResult(body) {
       `[autoCancelService] respuesta de cancelación sin cancelación pendiente conocida — ` +
         `orderId=${body.orderId} folio=${body.folioNumber} responseCode=${body.responseCode} message="${body.message}"`
     );
+    notifyService.notifyUnmatchedCancel(
+      `terminalOrderId="${body.orderId || '?'}" folio="${body.folioNumber || '?'}" monto=$${body.amount || '?'} ` +
+        `tarjeta=****${body.cardNumber || '?'} responseCode=${body.responseCode}`
+    );
     return 'unmatched';
   }
 
@@ -127,6 +131,10 @@ function resolveCancelResult(body) {
   if (approved) {
     console.log(
       `[autoCancelService] cancelación CONFIRMADA por la terminal — terminalOrderId=${key} (motivo original: ${info.reason})`
+    );
+    notifyService.notifyAutoCancelConfirmed(
+      `folio="${info.folioNumber || body.folioNumber || '?'}" terminalOrderId="${key}" monto=$${body.amount || '?'} ` +
+        `tarjeta=****${body.cardNumber || '?'} motivo="${info.reason}"`
     );
     return 'confirmed';
   }
