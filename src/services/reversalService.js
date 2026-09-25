@@ -53,8 +53,21 @@ const recheckDelayMs = () => ms('REVERSAL_RECHECK_DELAY_MS', 30000);
 // Separación entre reconsultas, para no encimar pushes a la terminal.
 const recheckSpacingMs = () => ms('REVERSAL_RECHECK_SPACING_MS', 5000);
 
-// folio -> { reason, detail, timer } — consultas enviadas esperando webhook.
+// folio -> { reason, detail, timer, done } — consultas enviadas esperando
+// webhook. `done` resuelve la promesa que regresa checkFolio() cuando la
+// consulta termina (respuesta, "no encontrada", timeout o falla al enviar).
 const inquiries = new Map();
+
+// Cierra una consulta abierta: limpia su timer y despierta a quien la
+// esté esperando (runRecheck). Regresa la consulta o null.
+function finishInquiry(folio) {
+  const inquiry = inquiries.get(folio);
+  if (!inquiry) return null;
+  clearTimeout(inquiry.timer);
+  inquiries.delete(folio);
+  inquiry.done();
+  return inquiry;
+}
 
 // ---------------------------------------------------------------------
 // Persistencia de pendientes
@@ -114,35 +127,45 @@ function getPending() {
 // Consulta (reimpresión por folio)
 // ---------------------------------------------------------------------
 /**
- * Pide a la terminal el estado de una venta por folio. Fire-and-forget:
- * nunca tira error hacia quien la llama. La respuesta llega por el webhook
- * y se procesa en handleReprintResponse().
+ * Pide a la terminal el estado de una venta por folio. Nunca tira error
+ * hacia quien la llama. La respuesta llega por el webhook y se procesa en
+ * handleReprintResponse() / handleNotFound(). Regresa una promesa que se
+ * resuelve cuando la consulta TERMINA (no solo cuando se envía) — los
+ * llamados normales la ignoran (fire-and-forget); runRecheck() la espera
+ * para no tener dos consultas abiertas a la vez, que es lo que permite
+ * atribuir una respuesta "No se encontraron datos" (que llega SIN folio).
  */
-async function checkFolio(folio, reason, detail = '') {
-  if (!folio) return;
+function checkFolio(folio, reason, detail = '') {
+  if (!folio) return Promise.resolve();
 
-  const previous = inquiries.get(folio);
-  if (previous) clearTimeout(previous.timer);
+  finishInquiry(folio); // una consulta anterior del mismo folio, si la hubiera
 
+  let done;
+  const finished = new Promise((resolve) => {
+    done = resolve;
+  });
   const timer = setTimeout(() => onInquiryTimeout(folio), inquiryTimeoutMs());
   if (typeof timer.unref === 'function') timer.unref();
-  inquiries.set(folio, { reason, detail, timer });
+  inquiries.set(folio, { reason, detail, timer, done });
 
-  try {
-    await netpayService.reprintByFolio({ folioId: folio });
-    console.log(`[reversalService] consulta de estado enviada — folio=${folio} (motivo: ${reason})`);
-  } catch (err) {
-    console.error(`[reversalService] no se pudo enviar la consulta — folio=${folio} (motivo: ${reason}): ${err.message}`);
-    clearTimeout(timer);
-    inquiries.delete(folio);
-    markUnknown(folio, reason, detail, `no se pudo enviar la consulta: ${err.message}`);
-  }
+  netpayService
+    .reprintByFolio({ folioId: folio })
+    .then(() => {
+      console.log(`[reversalService] consulta de estado enviada — folio=${folio} (motivo: ${reason})`);
+    })
+    .catch((err) => {
+      console.error(`[reversalService] no se pudo enviar la consulta — folio=${folio} (motivo: ${reason}): ${err.message}`);
+      if (finishInquiry(folio)) {
+        markUnknown(folio, reason, detail, `no se pudo enviar la consulta: ${err.message}`);
+      }
+    });
+
+  return finished;
 }
 
 function onInquiryTimeout(folio) {
-  const inquiry = inquiries.get(folio);
+  const inquiry = finishInquiry(folio);
   if (!inquiry) return;
-  inquiries.delete(folio);
   console.warn(
     `[reversalService] la terminal no respondió a la consulta en ${inquiryTimeoutMs()}ms — folio=${folio} (motivo: ${inquiry.reason})`
   );
@@ -206,10 +229,7 @@ function handleReprintResponse(body) {
       `responseCode=${body.responseCode} reprintModule=${module} message="${body.message}"`
   );
 
-  if (inquiry) {
-    clearTimeout(inquiry.timer);
-    inquiries.delete(folio);
-  }
+  if (inquiry) finishInquiry(folio);
 
   if (!inquiry && !pendingEntry) return module; // reimpresión manual, nada que hacer
 
@@ -286,6 +306,45 @@ function handleReprintResponse(body) {
   return module;
 }
 
+/**
+ * Respuesta de la terminal a una reimpresión por folio de un folio que
+ * NUNCA le llegó (confirmado en pruebas reales, 24-sep-2026 — terminal
+ * apagada antes de insertar la tarjeta):
+ *   { responseCode: "05", message: "No se encontraron datos",
+ *     folioNumber: "", transType: "", isRePrint: false, amount: "0.00" }
+ * No trae folio, así que solo se puede atribuir si hay EXACTAMENTE UNA
+ * consulta abierta en ese momento. Si la terminal no tiene ningún registro
+ * de la venta, no hubo autorización ni cobro — se da por resuelta.
+ */
+function handleNotFound(body) {
+  const open = [...inquiries.keys()];
+
+  if (open.length !== 1) {
+    console.warn(
+      `[reversalService] respuesta "${body.message}" sin folio y ${open.length} consulta(s) abierta(s) — ` +
+        `no se puede atribuir, se ignora (las consultas abiertas seguirán hasta su timeout)`
+    );
+    return null;
+  }
+
+  const folio = open[0];
+  const inquiry = finishInquiry(folio);
+  const pendingEntry = removePending(folio);
+  const origin = (pendingEntry && pendingEntry.origin) || inquiry.reason;
+
+  console.log(
+    `[reversalService] la terminal no tiene registro de la venta — folio=${folio} (motivo: ${origin}): ` +
+      `nunca le llegó, sin cobro`
+  );
+  if (pendingEntry) {
+    // Ya habíamos avisado 🟠 por este folio — cerrar el pendiente en el canal.
+    notifyService.notifyReversalNotFound(
+      `folio="${folio}" motivo="${origin}" — la venta nunca llegó a la terminal, no hubo cobro. Pendiente cerrado`
+    );
+  }
+  return folio;
+}
+
 // ---------------------------------------------------------------------
 // Reconsulta de pendientes
 // ---------------------------------------------------------------------
@@ -319,6 +378,8 @@ async function runRecheck() {
       return;
     }
     if (i > 0) await new Promise((resolve) => setTimeout(resolve, recheckSpacingMs()));
+    // Se espera a que la consulta TERMINE antes de mandar la siguiente —
+    // una sola consulta abierta a la vez (ver handleNotFound).
     await checkFolio(folios[i], 'recheck');
   }
 }
@@ -326,6 +387,7 @@ async function runRecheck() {
 module.exports = {
   checkFolio,
   handleReprintResponse,
+  handleNotFound,
   scheduleRecheck,
   getPending,
   // solo tests

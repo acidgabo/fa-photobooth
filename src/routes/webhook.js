@@ -54,8 +54,16 @@ function logTransaction(kind, body) {
 // responseCode "00" se confundía con un pago: o se registraba como COBRO
 // HUÉRFANO (si ya no había sesión), o peor, arrancaba una sesión de fotos
 // (si la sesión seguía en awaiting_payment con el mismo folio).
+//
+// Cuarto caso (confirmado en pruebas reales, 24-sep-2026): la respuesta a
+// una reimpresión por folio de un folio que la terminal NO tiene llega SIN
+// folio, SIN transType y con isRePrint:false — {"responseCode":"05",
+// "message":"No se encontraron datos","folioNumber":"","transType":""}.
+// Una venta real siempre trae folioNumber y transType, así que ambos
+// vacíos identifican este caso.
 function classifyTerminalResponse(body) {
   if (body.isRePrint === true || body.isRePrint === 'true') return 'reprint';
+  if (!body.folioNumber && !body.transType) return 'reprint_not_found';
   if (body.transType === 'V') return 'cancel';
   return 'sale';
 }
@@ -112,6 +120,11 @@ router.post('/netpay', async (req, res) => {
   if (kind === 'reprint') {
     // Consulta de estado / manejo de reversos — ver reversalService.
     reversalService.handleReprintResponse(req.body);
+    return res.status(200).json(NETPAY_ACK);
+  }
+
+  if (kind === 'reprint_not_found') {
+    reversalService.handleNotFound(req.body);
     return res.status(200).json(NETPAY_ACK);
   }
 

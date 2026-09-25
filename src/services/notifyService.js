@@ -105,6 +105,12 @@ function notifyReversalUnknown(detail) {
   return notifyDiscord(`🟠 No se pudo confirmar el estado de una venta — posible cobro sin servicio\nDetalles: ${detail}`);
 }
 
+// Un folio que habíamos marcado como pendiente resultó no existir en la
+// terminal (la venta nunca le llegó) — no hubo cobro, se cierra el aviso.
+function notifyReversalNotFound(detail) {
+  return notifyDiscord(`✅ Venta pendiente resuelta — no hubo cobro\nDetalles: ${detail}`);
+}
+
 // La consulta regresó algo que no cuadra con lo que sabíamos de la venta.
 function notifyReversalMismatch(detail) {
   return notifyDiscord(`🔴 Estado de venta inesperado — revisar a mano\nDetalles: ${detail}`);
@@ -122,4 +128,5 @@ module.exports = {
   notifyReversalPending,
   notifyReversalUnknown,
   notifyReversalMismatch,
+  notifyReversalNotFound,
 };
