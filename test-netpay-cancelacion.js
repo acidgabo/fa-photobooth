@@ -165,7 +165,11 @@ function ask(question) {
   }
 
   try {
-    const result = await netpayService.cancelSale({ orderId });
+    const result = await netpayService.cancelSale({
+      orderId,
+      folioNumber: sale ? sale.folioNumber : undefined,
+      reason: 'manual',
+    });
     console.log(`Cancelación de orderId "${orderId}" enviada a la terminal.`);
     console.log('Respuesta de NetPay al push:', JSON.stringify(result));
     console.log('El resultado real llega por el webhook (transType "V") — revisa la consola del backend.');

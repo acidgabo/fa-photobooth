@@ -10,6 +10,7 @@ const windirectBoothService = require('../services/windirectBoothService');
 const windowFocusService = require('../services/windowFocusService');
 const { autoCancelSale, resolveCancelResult } = require('../services/autoCancelService');
 const reversalService = require('../services/reversalService');
+const netpayLog = require('../services/netpayLog');
 
 // Registro en archivo aparte de los cobros huérfanos (ver COBRO HUÉRFANO más
 // abajo) — para que quede constancia aunque nadie esté viendo la consola en
@@ -18,28 +19,25 @@ const reversalService = require('../services/reversalService');
 const ORPHAN_LOG_PATH = path.join(__dirname, '..', '..', 'logs', 'cobros-huerfanos.log');
 
 // Bitácora de TODAS las respuestas que manda la terminal (ventas,
-// cancelaciones y reimpresiones), una línea JSON por evento — cubre el
-// requisito de certificación de NetPay "Implementación de logging en el
-// punto de venta" y deja evidencia consultable después sin depender de
+// cancelaciones y reimpresiones), una línea JSON por evento, en el mismo
+// archivo donde netpayService.js registra las peticiones que salen hacia
+// NetPay (ver services/netpayLog.js) — cubre el requisito de certificación
+// "Implementación de logging en el punto de venta" sin depender de
 // NETPAY_DEBUG_LOG. Solo campos útiles para conciliar; nada de datos
 // sensibles de la tarjeta (cardNumber ya son solo los últimos 4).
-const TRANSACTIONS_LOG_PATH = path.join(__dirname, '..', '..', 'logs', 'netpay-transacciones.log');
+// traceability se guarda para comprobar que la terminal regresa lo que le
+// mandamos.
 const LOGGED_FIELDS = [
   'transType', 'isRePrint', 'reprintModule', 'responseCode', 'message', 'folioNumber', 'orderId',
-  'amount', 'authCode', 'cardNumber', 'transactionId', 'rrnNumber', 'transDate',
+  'amount', 'authCode', 'cardNumber', 'transactionId', 'rrnNumber', 'transDate', 'traceability',
 ];
 
 function logTransaction(kind, body) {
-  try {
-    const entry = { at: new Date().toISOString(), kind };
-    for (const field of LOGGED_FIELDS) {
-      if (body[field] !== undefined) entry[field] = body[field];
-    }
-    fs.mkdirSync(path.dirname(TRANSACTIONS_LOG_PATH), { recursive: true });
-    fs.appendFileSync(TRANSACTIONS_LOG_PATH, `${JSON.stringify(entry)}\n`);
-  } catch (err) {
-    console.error(`[webhook] no se pudo escribir en ${TRANSACTIONS_LOG_PATH}: ${err.message}`);
+  const entry = { kind };
+  for (const field of LOGGED_FIELDS) {
+    if (body[field] !== undefined) entry[field] = body[field];
   }
+  netpayLog.append(entry);
 }
 
 // Qué tipo de respuesta mandó la terminal. Se decide ANTES de comparar

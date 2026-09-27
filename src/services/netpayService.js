@@ -1,10 +1,34 @@
 const axios = require('axios');
 const config = require('../config');
+const netpayLog = require('./netpayLog');
 
 // Guardamos el token en memoria (proceso único en la NUC). Si el backend
 // se reinicia, se vuelve a pedir. El access_token dura ~12h según la doc.
 let cachedToken = null;
 let cachedTokenExpiresAt = 0;
+
+/**
+ * Objeto "traceability" que va en TODAS las peticiones a NetPay (venta,
+ * cancelación, reimpresión) — checklist obligatorio de certificación
+ * ("Implementación del objeto traceability"). Según la Referencia API es
+ * un objeto libre "para enviar información relevante para el comercio"
+ * que sirve para hacer match dentro de nuestro sistema; la terminal lo
+ * regresa tal cual en el webhook.
+ *
+ * Se mantiene plano y corto (solo strings, máx. 60 caracteres por valor)
+ * para no arriesgar un rechazo por tamaño o tipo. Siempre incluye la
+ * cabina (BOOTH_ID); los campos vacíos se omiten.
+ */
+const TRACEABILITY_MAX_LEN = 60;
+
+function buildTraceability(fields = {}) {
+  const traceability = { cabina: config.netpay.boothId };
+  for (const [key, value] of Object.entries(fields)) {
+    if (value === undefined || value === null || value === '') continue;
+    traceability[key] = String(value).slice(0, TRACEABILITY_MAX_LEN);
+  }
+  return traceability;
+}
 
 /**
  * Confirmado contra el correo de Integraciones de Netpay (Terminales Smart
@@ -32,58 +56,51 @@ async function getAccessToken() {
     password: config.netpay.password,
   });
 
-  const response = await axios.post(`${config.netpay.baseUrl}/oauth-service/oauth/token`, body, {
-    headers: {
-      Authorization: `Basic ${config.netpay.authString}`,
-      'Content-Type': 'application/x-www-form-urlencoded',
-    },
-    // 15s: con 5s se vio fallar la PRIMERA petición de token en pruebas reales
-    // (24-sep-2026, "timeout of 5000ms exceeded" con el servidor OAuth de
-    // NetPay lento) — posible causa de parte de los timeouts intermitentes
-    // del 16-sep. Sigue acotado para que una URL mal configurada no se
-    // cuelgue en silencio.
-    timeout: 15000,
-  });
+  // Cada token NUEVO queda en la bitácora (los que salen del cache no):
+  // así se puede demostrar en la certificación con qué frecuencia se
+  // genera ("Validación de generación de access token"). Nunca se escribe
+  // el token ni las credenciales.
+  const startedAt = Date.now();
+  let response;
+  try {
+    response = await axios.post(`${config.netpay.baseUrl}/oauth-service/oauth/token`, body, {
+      headers: {
+        Authorization: `Basic ${config.netpay.authString}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      // 15s: con 5s se vio fallar la PRIMERA petición de token en pruebas reales
+      // (24-sep-2026, "timeout of 5000ms exceeded" con el servidor OAuth de
+      // NetPay lento) — posible causa de parte de los timeouts intermitentes
+      // del 16-sep. Sigue acotado para que una URL mal configurada no se
+      // cuelgue en silencio.
+      timeout: 15000,
+    });
+  } catch (err) {
+    netpayLog.append({
+      kind: 'request',
+      op: 'token',
+      endpoint: '/oauth-service/oauth/token',
+      ok: false,
+      httpStatus: err.response ? err.response.status : undefined,
+      error: err.code || 'error',
+      message: err.message,
+      durationMs: Date.now() - startedAt,
+    });
+    throw err;
+  }
 
   cachedToken = response.data.access_token;
   cachedTokenExpiresAt = now + (response.data.expires_in || 3600) * 1000;
+  netpayLog.append({
+    kind: 'request',
+    op: 'token',
+    endpoint: '/oauth-service/oauth/token',
+    ok: true,
+    httpStatus: response.status,
+    expiresIn: response.data.expires_in,
+    durationMs: Date.now() - startedAt,
+  });
   return cachedToken;
-}
-
-/**
- * Inicia un cobro en la terminal A910.
- * Confirmado contra la Referencia API (sección "5. Venta"):
- * - Endpoint: sin el prefijo "/gateway" que tenía antes.
- * - "folioNumber" es obligatorio — es NUESTRO identificador de referencia
- *   (reutilizamos el mismo orderId que ya trackeamos en sessionState).
- *   "orderId" en sí NO es un campo del request: lo genera y regresa la
- *   propia terminal en su respuesta (distinto a nuestro orderId interno).
- * - "traceability" también es obligatorio según la tabla de parámetros
- *   (puede ir como objeto vacío si no necesitamos mandar nada extra).
- *
- * Timeout de 20s (no 5s como en getAccessToken): esta llamada empuja un
- * cobro a un dispositivo físico (la terminal), no solo pega contra un
- * servicio en la nube — confirmado en pruebas reales que un timeout de 5s
- * es demasiado ajustado y produce "timeout of 5000ms exceeded" en
- * situaciones donde la terminal tarda en confirmar que recibió el push
- * (p. ej. si venía de mostrar el ticket de una transacción anterior).
- */
-async function createSale({ amount, orderId }) {
-  const token = await getAccessToken();
-
-  const response = await axios.post(
-    `${config.netpay.baseUrl}/integration-service/transactions/sale`,
-    {
-      serialNumber: config.netpay.serialNumber,
-      storeId: config.netpay.storeId,
-      amount,
-      folioNumber: orderId,
-      traceability: {},
-    },
-    { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, timeout: 20000 }
-  );
-
-  return response.data;
 }
 
 // NetPay exige que la solicitud de cancelación llegue antes de las 8:00
@@ -106,12 +123,25 @@ function isPastCancelCutoff(now = new Date()) {
   return hourCdmx >= 20;
 }
 
+// Qué se registra de cada petición en la bitácora (netpayLog). Solo datos
+// para conciliar: nunca el token ni credenciales.
+function describeRequest(op, pathSuffix, body) {
+  return {
+    kind: 'request',
+    op,
+    endpoint: pathSuffix,
+    folioNumber: body.folioNumber || body.folioId || undefined,
+    orderId: body.orderId || undefined,
+    amount: body.amount,
+    print: body.disablePrintAnimation === undefined ? undefined : !body.disablePrintAnimation,
+    traceability: body.traceability,
+  };
+}
+
 /**
- * Helper común para los "push" a la terminal que NO son la venta
- * (cancelación y reimpresiones). createSale() se queda como está a
- * propósito — su validación de respuesta es un paso aparte.
+ * Helper común para TODOS los "push" a la terminal: venta, cancelación y
+ * reimpresiones.
  *
- * Dos cosas que createSale() todavía no hace y aquí sí:
  * - Valida el "code" del body: NetPay responde {code:"00", message:"Mensaje
  *   enviado exitosamente"} cuando el push llegó a la terminal, y
  *   {code:"19", message:"No se encontró la terminal"} cuando no. Cualquier
@@ -122,29 +152,68 @@ function isPastCancelCutoff(now = new Date()) {
  * - Si NetPay rechaza el token (invalid_token / 401) se descarta el token
  *   cacheado y se reintenta UNA vez con uno nuevo — sin esto, un token
  *   invalidado del lado de NetPay antes de sus 12h dejaría fallando todas
- *   las operaciones hasta reiniciar el backend.
+ *   las operaciones hasta reiniciar el backend. Es seguro también para la
+ *   venta: con 401 NetPay no empujó nada a la terminal.
+ * - Registra cada petición y su resultado inmediato en la bitácora
+ *   (logs/netpay-transacciones.log, kind "request").
  */
-async function pushToTerminal(pathSuffix, body, { retryOnInvalidToken = true } = {}) {
+async function pushToTerminal(op, pathSuffix, body) {
+  const startedAt = Date.now();
+  const attempt = { tokenRenewed: false };
+  const logBase = describeRequest(op, pathSuffix, body);
+
+  try {
+    const data = await sendToTerminal(pathSuffix, body, attempt);
+    netpayLog.append({
+      ...logBase,
+      ok: true,
+      code: data.code,
+      message: data.message,
+      tokenRenewed: attempt.tokenRenewed || undefined,
+      durationMs: Date.now() - startedAt,
+    });
+    return data;
+  } catch (err) {
+    netpayLog.append({
+      ...logBase,
+      ok: false,
+      httpStatus: err.response ? err.response.status : undefined,
+      error: err.code || 'error',
+      message: err.message,
+      tokenRenewed: attempt.tokenRenewed || undefined,
+      durationMs: Date.now() - startedAt,
+    });
+    throw err;
+  }
+}
+
+async function sendToTerminal(pathSuffix, body, attempt) {
   const token = await getAccessToken();
 
   let response;
   try {
     response = await axios.post(`${config.netpay.baseUrl}${pathSuffix}`, body, {
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      timeout: 20000, // push a un dispositivo físico — mismo criterio que createSale()
+      // 20s (no 5s): esta llamada empuja una orden a un dispositivo físico,
+      // no solo pega contra un servicio en la nube — con 5s hubo timeouts
+      // reales cuando la terminal venía de mostrar el ticket anterior.
+      timeout: 20000,
     });
   } catch (err) {
     const data = err.response && err.response.data;
     const isInvalidToken =
       (err.response && err.response.status === 401) || (data && data.error === 'invalid_token');
-    if (isInvalidToken && retryOnInvalidToken) {
+    if (isInvalidToken && !attempt.tokenRenewed) {
+      console.warn(`[netpayService] NetPay rechazó el token en ${pathSuffix} — se pide uno nuevo y se reintenta una vez`);
       cachedToken = null;
       cachedTokenExpiresAt = 0;
-      return pushToTerminal(pathSuffix, body, { retryOnInvalidToken: false });
+      attempt.tokenRenewed = true;
+      return sendToTerminal(pathSuffix, body, attempt);
     }
     if (data && data.code) {
       const wrapped = new Error(`NetPay ${pathSuffix}: code ${data.code} — ${data.message || 'sin mensaje'}`);
       wrapped.code = `netpay_${data.code}`;
+      wrapped.response = err.response;
       throw wrapped;
     }
     throw err;
@@ -160,40 +229,77 @@ async function pushToTerminal(pathSuffix, body, { retryOnInvalidToken = true } =
 }
 
 /**
+ * Inicia un cobro en la terminal A910.
+ * Confirmado contra la Referencia API (sección "5. Venta"):
+ * - Endpoint: sin el prefijo "/gateway" que tenía antes.
+ * - "folioNumber" es obligatorio — es NUESTRO identificador de referencia
+ *   (reutilizamos el mismo orderId que ya trackeamos en sessionState).
+ *   "orderId" en sí NO es un campo del request: lo genera y regresa la
+ *   propia terminal en su respuesta (distinto a nuestro orderId interno).
+ * - "traceability" es obligatorio: cabina, folio, paquete y operación
+ *   (ver buildTraceability).
+ * - Va por pushToTerminal() (27-sep-2026): valida el "code" de la
+ *   respuesta — antes un code "19" (terminal no encontrada) pasaba como
+ *   éxito y el cliente esperaba hasta el watchdog de pago — y reintenta
+ *   una vez con token nuevo si NetPay lo invalidó.
+ * - Que regrese sin error solo significa que la terminal RECIBIÓ la venta;
+ *   el resultado llega por el webhook.
+ */
+async function createSale({ amount, orderId, packageId }) {
+  return pushToTerminal('sale', '/integration-service/transactions/sale', {
+    serialNumber: config.netpay.serialNumber,
+    storeId: config.netpay.storeId,
+    amount,
+    folioNumber: orderId,
+    traceability: buildTraceability({ operacion: 'venta', folio: orderId, paquete: packageId }),
+  });
+}
+
+/**
  * Cancela (reversa) una venta ya cobrada — SIEMPRE por el monto completo,
  * NetPay no soporta cancelaciones parciales.
  * Confirmado contra la Referencia API oficial ("6. Cancelación") y el
  * correo de Integraciones:
  * - Endpoint: POST {baseUrl}/integration-service/transactions/cancel
- * - Body: { serialNumber, storeId, orderId } — este "orderId" es el que la
- *   PROPIA terminal generó y regresó en la respuesta de la venta original
- *   (terminalOrderId en sessionState.js / routes/webhook.js), NO nuestro
- *   folioNumber/orderId interno que sí usa createSale().
+ * - Body: { serialNumber, storeId, orderId, traceability } — este
+ *   "orderId" es el que la PROPIA terminal generó y regresó en la
+ *   respuesta de la venta original (terminalOrderId en sessionState.js /
+ *   routes/webhook.js), NO nuestro folioNumber/orderId interno.
+ *   folioNumber y reason son opcionales y solo van en traceability/log.
  * - Restricción: mismo día + antes de las 8pm CDMX (ver isPastCancelCutoff
  *   arriba) — se revisa ANTES de llamar al endpoint para no gastar el
  *   intento en un request que sabemos que NetPay va a rechazar, y para
  *   poder distinguir en el log/aviso "fuera de ventana" de una falla real
- *   de red o de la terminal.
+ *   de red o de la terminal. También queda en la bitácora.
  * - Que esta función regrese sin error solo significa que la terminal
  *   RECIBIÓ la orden de cancelar. El resultado real (aprobada/declinada)
  *   llega por el webhook con transType "V" — ver autoCancelService.
  *   resolveCancelResult().
  */
-async function cancelSale({ orderId }) {
+async function cancelSale({ orderId, folioNumber, reason }) {
+  const body = {
+    serialNumber: config.netpay.serialNumber,
+    storeId: config.netpay.storeId,
+    orderId,
+    traceability: buildTraceability({ operacion: 'cancelacion', folio: folioNumber, motivo: reason }),
+  };
+
   if (isPastCancelCutoff()) {
     const err = new Error(
       'fuera de la ventana de cancelación de NetPay (después de las 8:00 p.m. hora CDMX) — requiere reverso manual'
     );
     err.code = 'cancel_window_closed';
+    netpayLog.append({
+      ...describeRequest('cancel', '/integration-service/transactions/cancel', body),
+      ok: false,
+      sent: false,
+      error: err.code,
+      message: err.message,
+    });
     throw err;
   }
 
-  return pushToTerminal('/integration-service/transactions/cancel', {
-    serialNumber: config.netpay.serialNumber,
-    storeId: config.netpay.storeId,
-    orderId,
-    traceability: {},
-  });
+  return pushToTerminal('cancel', '/integration-service/transactions/cancel', body);
 }
 
 /**
@@ -208,13 +314,13 @@ async function cancelSale({ orderId }) {
  *   cuando de verdad se necesita el papel (p.ej. pruebas de certificación).
  * - La respuesta llega por el webhook con isRePrint:true (routes/webhook.js).
  */
-async function reprintByOrderId({ orderId, print = false }) {
+async function reprintByOrderId({ orderId, print = false, folioNumber }) {
   if (!orderId) throw new Error('reprintByOrderId: falta orderId (terminalOrderId)');
-  return pushToTerminal('/integration-service/transactions/reprint', {
+  return pushToTerminal('reprint', '/integration-service/transactions/reprint', {
     serialNumber: config.netpay.serialNumber,
     storeId: config.netpay.storeId,
     orderId,
-    traceability: {},
+    traceability: buildTraceability({ operacion: 'reimpresion', folio: folioNumber }),
     disablePrintAnimation: !print,
   });
 }
@@ -235,12 +341,12 @@ async function reprintByOrderId({ orderId, print = false }) {
  */
 async function reprintByFolio({ folioId, print = false }) {
   if (!folioId) throw new Error('reprintByFolio: falta folioId');
-  return pushToTerminal('/integration-service/transactions/reprint', {
+  return pushToTerminal('reprint', '/integration-service/transactions/reprint', {
     serialNumber: config.netpay.serialNumber,
     storeId: config.netpay.storeId,
     orderId: '',
     folioId,
-    traceability: {},
+    traceability: buildTraceability({ operacion: 'reimpresion', folio: folioId }),
     disablePrintAnimation: !print,
   });
 }
@@ -252,4 +358,5 @@ module.exports = {
   reprintByOrderId,
   reprintByFolio,
   isPastCancelCutoff,
+  buildTraceability,
 };

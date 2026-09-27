@@ -60,15 +60,25 @@ router.post('/pay', async (req, res) => {
   const amount = pkg.price;
 
   try {
-    // TODO: cuando exista credencial de sandbox, esto llama de verdad a NetPay.
-    // Por ahora solo deja la sesión en "awaiting_payment" y responde 202,
-    // porque la confirmación real llega después por /webhooks/netpay.
-    await netpayService.createSale({ amount, orderId });
+    // Solo EMPUJA la venta a la terminal (y valida que NetPay la haya
+    // recibido, code "00"). La confirmación real del cobro llega después
+    // por /webhooks/netpay; mientras tanto la sesión queda en
+    // "awaiting_payment".
+    await netpayService.createSale({ amount, orderId, packageId: pkg.id });
     res.status(202).json({ orderId, status: 'awaiting_payment' });
   } catch (err) {
+    // TODO (A4, pendiente): distinguir un error ambiguo (timeout / sin
+    // respuesta HTTP: la terminal pudo haber recibido la venta) de un
+    // rechazo claro (code distinto de "00", p. ej. "19" terminal no
+    // encontrada). Hoy ambos marcan la sesión como error.
+    console.error(`[payment] no se pudo iniciar el cobro (folio ${orderId}): ${err.message}`);
     sessionState.set({ status: 'error', error: err.message });
-    res.status(501).json({
-      error: 'NetPay no implementado todavía (esqueleto)',
+    // El frontend muestra "error" tal cual al cliente (+ "verifica tu
+    // tarjeta e intenta de nuevo"), así que va un texto para el cliente;
+    // el detalle técnico queda en "detail", la consola y la bitácora.
+    res.status(502).json({
+      error: 'No se pudo conectar con la terminal de pago',
+      code: err.code,
       detail: err.message,
       orderId,
     });

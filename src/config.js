@@ -34,6 +34,11 @@ module.exports = {
     serialNumber: process.env.NETPAY_SERIAL_NUMBER || '',
     storeId: process.env.NETPAY_STORE_ID || '',
     webhookPath: process.env.NETPAY_WEBHOOK_PATH || '/webhooks/netpay',
+    // Identificador de esta cabina dentro del objeto "traceability" que se
+    // manda en cada petición a NetPay (checklist de certificación:
+    // "Implementación del objeto traceability"). Sirve para conciliar
+    // cuando haya más de una cabina con la misma cuenta.
+    boothId: process.env.BOOTH_ID || 'cabina-1',
     // Log temporal de diagnóstico en el webhook (imprime el body completo
     // recibido de la terminal) — activar con NETPAY_DEBUG_LOG=true en .env
     // mientras se sigue validando la integración contra la terminal real.

@@ -45,7 +45,7 @@ async function autoCancelSale(terminalOrderId, reason, { folioNumber = null } = 
   }
 
   try {
-    await netpayService.cancelSale({ orderId: terminalOrderId });
+    await netpayService.cancelSale({ orderId: terminalOrderId, folioNumber, reason });
   } catch (err) {
     console.error(
       `[autoCancelService] la cancelación automática FALLÓ al enviarse — terminalOrderId=${terminalOrderId} ` +
