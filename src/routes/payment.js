@@ -22,20 +22,50 @@ router.get('/packages', (req, res) => {
 // que causaba los cobros huérfanos documentados en
 // Bitacora_Pruebas_Netpay_dslrBooth.md.
 router.get('/config', (req, res) => {
-  res.json({ paymentMock: config.netpay.isMock });
+  res.json({ paymentMock: config.netpay.isMock, certCustomAmount: config.netpay.certCustomAmount });
 });
+
+// Estados en los que ya hay una venta o una sesión de fotos en curso — un
+// segundo POST /api/pay en cualquiera de ellos pisaría la sesión activa y
+// dejaría el primer cobro huérfano. 'idle' y 'error' sí aceptan un pago
+// nuevo (el frontend resetea la sesión antes de reintentar).
+const BUSY_STATUSES = new Set(['awaiting_payment', 'payment_confirmed', 'booth_running']);
+
+// Monto manual de certificación (CERT_CUSTOM_AMOUNT=true, ver config.js).
+// Regresa el número válido o null.
+const CERT_MAX_AMOUNT = 50000;
+function parseCertAmount(value) {
+  const amount = Number(value);
+  if (!Number.isFinite(amount) || amount <= 0 || amount > CERT_MAX_AMOUNT) return null;
+  return Math.round(amount * 100) / 100;
+}
 
 // El frontend llama esto cuando el usuario elige un paquete y toca "Pagar".
 // IMPORTANTE: el monto NUNCA se toma de lo que mande el navegador — se
 // busca en el catálogo del backend a partir de packageId. Si se confiara
 // en un "amount" mandado por el cliente, cualquiera con las herramientas
-// de desarrollador podría pagar $1 por un paquete de $120.
+// de desarrollador podría pagar $1 por un paquete de $120. Única excepción:
+// CERT_CUSTOM_AMOUNT=true, solo para la sesión de certificación (ver
+// config.js); en producción va en false y "amount" se ignora.
 router.post('/pay', async (req, res) => {
   const { packageId } = req.body;
 
   const pkg = packageId && packages.getById(packageId);
   if (!pkg) {
     return res.status(400).json({ error: `packageId inválido o faltante: ${packageId}` });
+  }
+
+  // Monto: SIEMPRE el del catálogo, salvo en modo certificación.
+  let amount = pkg.price;
+  let packageForTrace = pkg.id;
+  if (config.netpay.certCustomAmount && req.body.amount !== undefined && req.body.amount !== null && req.body.amount !== '') {
+    const certAmount = parseCertAmount(req.body.amount);
+    if (certAmount === null) {
+      return res.status(400).json({ error: `Monto de prueba inválido: ${req.body.amount}` });
+    }
+    amount = certAmount;
+    packageForTrace = 'prueba-certificacion';
+    console.warn(`[payment] MODO CERTIFICACIÓN: se cobra un monto manual de $${amount} (CERT_CUSTOM_AMOUNT=true)`);
   }
 
   // Chequeo síncrono y FRESCO de cámara+impresora — la garantía real del
@@ -49,6 +79,21 @@ router.post('/pay', async (req, res) => {
     return res.status(503).json({ error: 'hardware_unavailable', detail: hw.reasons.join(' | ') });
   }
 
+  // Bloqueo de multi-instancias del lado del backend (además del guard
+  // paymentInFlight del frontend): nunca se manda una segunda venta
+  // mientras hay otra en curso, aunque llegue de otra pestaña o de un
+  // doble envío que se salte el frontend. Pregunta y escenario de
+  // certificación "Venta normal con NIP (crédito) con multi-instancias".
+  // Va justo antes de sessionState.set(), sin ningún await de por medio,
+  // para que dos peticiones casi simultáneas no pasen las dos el chequeo.
+  const current = sessionState.get();
+  if (BUSY_STATUSES.has(current.status)) {
+    console.warn(
+      `[payment] POST /api/pay rechazado — ya hay una sesión en curso (estado: ${current.status}, folio: ${current.orderId})`
+    );
+    return res.status(409).json({ error: 'Ya hay un pago en curso', code: 'session_in_progress', orderId: current.orderId });
+  }
+
   const orderId = `order_${Date.now()}`;
   sessionState.set({
     status: 'awaiting_payment',
@@ -57,14 +102,12 @@ router.post('/pay', async (req, res) => {
     error: null,
   });
 
-  const amount = pkg.price;
-
   try {
     // Solo EMPUJA la venta a la terminal (y valida que NetPay la haya
     // recibido, code "00"). La confirmación real del cobro llega después
     // por /webhooks/netpay; mientras tanto la sesión queda en
     // "awaiting_payment".
-    await netpayService.createSale({ amount, orderId, packageId: pkg.id });
+    await netpayService.createSale({ amount, orderId, packageId: packageForTrace });
     res.status(202).json({ orderId, status: 'awaiting_payment' });
   } catch (err) {
     // TODO (A4, pendiente): distinguir un error ambiguo (timeout / sin

@@ -448,6 +448,7 @@
         let paymentTimeoutTimer = null;  // 30s sin respuesta → error automático (solo modo mock)
         let packagesCache = [];
         let paymentMock = false;  // GET /api/config decide esto antes de que se pueda pagar
+        let certCustomAmount = false;  // CERT_CUSTOM_AMOUNT=true en el backend: pedir el monto (solo certificación)
         let paymentInFlight = false;  // guard contra doble submit en selectPackage()
         let errorAutoReturnTimer = null;  // 30s en pantalla de error sin tocar nada → regresa sola al inicio
 
@@ -494,8 +495,10 @@
             try {
                 const cfg = await api('/api/config');
                 paymentMock = !!cfg.paymentMock;
+                certCustomAmount = !!cfg.certCustomAmount;
             } catch (err) {
                 paymentMock = false;
+                certCustomAmount = false;
             }
             // Los botones "Simular aprobación/error" solo tienen sentido
             // contra el mock — con terminal real, dejarlos visibles permite
@@ -561,6 +564,17 @@
             currentPackage = packagesCache.find(p => p.id === packageId);
             if (!currentPackage) return;
 
+            // SOLO certificación (CERT_CUSTOM_AMOUNT=true en el backend): se
+            // pide el monto a cobrar, para los escenarios de la matriz de
+            // NetPay con montos específicos. Vacío = precio del paquete;
+            // Cancelar = no se cobra nada. En producción no aparece.
+            let certAmount = null;
+            if (certCustomAmount) {
+                const answer = window.prompt('MODO CERTIFICACIÓN — monto a cobrar (MXN). Vacío = precio del paquete.', '');
+                if (answer === null) return;
+                if (answer.trim() !== '') certAmount = answer.trim().replace(',', '.');
+            }
+
             paymentInFlight = true;
             setPackagesDisabled(true);
 
@@ -568,13 +582,15 @@
             // que es un solo paquete sin 3/4 tomas fijas, ese campo se quitó
             // de packages.js (ver comentario ahí).
             document.getElementById('packageSelected').textContent =
-                currentPackage.name + ' - $' + currentPackage.price + ' MXN';
+                currentPackage.name + ' - $' + (certAmount !== null ? certAmount : currentPackage.price) + ' MXN';
 
             try {
+                const payBody = { packageId: packageId };
+                if (certAmount !== null) payBody.amount = certAmount;
                 const result = await api('/api/pay', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ packageId: packageId }),
+                    body: JSON.stringify(payBody),
                 });
                 currentOrderId = result.orderId;
                 goToScreen(3);

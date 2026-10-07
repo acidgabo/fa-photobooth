@@ -7,6 +7,18 @@ const netpayLog = require('./netpayLog');
 let cachedToken = null;
 let cachedTokenExpiresAt = 0;
 
+// El token se renueva ANTES de que venza: NetPay espera que se regenere de
+// forma periódica ("por ejemplo, cada 6 u 11 horas"; el refresh token no
+// existe y no se usa). Con expires_in de ~12h esto lo renueva a las ~11h,
+// así ninguna venta sale con un token a punto de caducar.
+const TOKEN_RENEW_MARGIN_MS = 60 * 60 * 1000;
+
+function tokenLifetimeMs(expiresInSeconds) {
+  const lifetimeMs = (expiresInSeconds || 3600) * 1000;
+  // Si algún día NetPay diera tokens cortos (< 2h), se usa el 90% de su vida.
+  return lifetimeMs > 2 * TOKEN_RENEW_MARGIN_MS ? lifetimeMs - TOKEN_RENEW_MARGIN_MS : Math.floor(lifetimeMs * 0.9);
+}
+
 /**
  * Objeto "traceability" que va en TODAS las peticiones a NetPay (venta,
  * cancelación, reimpresión) — checklist obligatorio de certificación
@@ -63,7 +75,7 @@ async function getAccessToken() {
   const startedAt = Date.now();
   let response;
   try {
-    response = await axios.post(`${config.netpay.baseUrl}/oauth-service/oauth/token`, body, {
+    response = await axios.post(`${config.netpay.baseUrl}${config.netpay.tokenPath}`, body, {
       headers: {
         Authorization: `Basic ${config.netpay.authString}`,
         'Content-Type': 'application/x-www-form-urlencoded',
@@ -79,7 +91,7 @@ async function getAccessToken() {
     netpayLog.append({
       kind: 'request',
       op: 'token',
-      endpoint: '/oauth-service/oauth/token',
+      endpoint: config.netpay.tokenPath,
       ok: false,
       httpStatus: err.response ? err.response.status : undefined,
       error: err.code || 'error',
@@ -90,14 +102,15 @@ async function getAccessToken() {
   }
 
   cachedToken = response.data.access_token;
-  cachedTokenExpiresAt = now + (response.data.expires_in || 3600) * 1000;
+  cachedTokenExpiresAt = now + tokenLifetimeMs(response.data.expires_in);
   netpayLog.append({
     kind: 'request',
     op: 'token',
-    endpoint: '/oauth-service/oauth/token',
+    endpoint: config.netpay.tokenPath,
     ok: true,
     httpStatus: response.status,
     expiresIn: response.data.expires_in,
+    renewAt: new Date(cachedTokenExpiresAt).toISOString(),
     durationMs: Date.now() - startedAt,
   });
   return cachedToken;
@@ -155,12 +168,17 @@ function describeRequest(op, pathSuffix, body) {
  *   las operaciones hasta reiniciar el backend. Es seguro también para la
  *   venta: con 401 NetPay no empujó nada a la terminal.
  * - Registra cada petición y su resultado inmediato en la bitácora
- *   (logs/netpay-transacciones.log, kind "request").
+ *   (logs/netpay-transacciones.log, kind "request"). ANTES de enviar se
+ *   escribe una línea con stage "enviando" (pre-registro): si el backend se
+ *   cae o la petición se cuelga, el folio ya quedó registrado y la venta se
+ *   puede recuperar por reimpresión por folio.
  */
 async function pushToTerminal(op, pathSuffix, body) {
   const startedAt = Date.now();
   const attempt = { tokenRenewed: false };
   const logBase = describeRequest(op, pathSuffix, body);
+
+  netpayLog.append({ ...logBase, stage: 'enviando' });
 
   try {
     const data = await sendToTerminal(pathSuffix, body, attempt);
@@ -276,6 +294,11 @@ async function createSale({ amount, orderId, packageId }) {
  *   llega por el webhook con transType "V" — ver autoCancelService.
  *   resolveCancelResult().
  */
+// orderIds (de la terminal) con una cancelación en vuelo en ESTE proceso —
+// cubre dos llamadas casi simultáneas antes de que la primera alcance a
+// quedar en el log.
+const cancelsInFlight = new Set();
+
 async function cancelSale({ orderId, folioNumber, reason }) {
   const body = {
     serialNumber: config.netpay.serialNumber,
@@ -283,6 +306,30 @@ async function cancelSale({ orderId, folioNumber, reason }) {
     orderId,
     traceability: buildTraceability({ operacion: 'cancelacion', folio: folioNumber, motivo: reason }),
   };
+
+  // Bloqueo de multi-instancias / doble cancelación (escenarios de
+  // certificación "Cancelación de una venta con multi-instancias" y "Evitar
+  // la cancelación de una venta cancelada desde el POS"): no se manda una
+  // segunda cancelación si ya hay una en curso o si la venta ya está
+  // cancelada según el log. Aplica igual a la cancelación automática y al
+  // script manual. Queda en la bitácora con sent:false.
+  const blocked = cancelsInFlight.has(orderId) ? 'pending' : netpayLog.findCancelState(orderId);
+  if (blocked) {
+    const err = new Error(
+      blocked === 'cancelled'
+        ? `la venta ${orderId} ya está cancelada — no se envía otra cancelación`
+        : `ya hay una cancelación en curso para ${orderId} — se espera su respuesta antes de reintentar`
+    );
+    err.code = blocked === 'cancelled' ? 'already_cancelled' : 'cancel_in_progress';
+    netpayLog.append({
+      ...describeRequest('cancel', '/integration-service/transactions/cancel', body),
+      ok: false,
+      sent: false,
+      error: err.code,
+      message: err.message,
+    });
+    throw err;
+  }
 
   if (isPastCancelCutoff()) {
     const err = new Error(
@@ -299,7 +346,12 @@ async function cancelSale({ orderId, folioNumber, reason }) {
     throw err;
   }
 
-  return pushToTerminal('cancel', '/integration-service/transactions/cancel', body);
+  cancelsInFlight.add(orderId);
+  try {
+    return await pushToTerminal('cancel', '/integration-service/transactions/cancel', body);
+  } finally {
+    cancelsInFlight.delete(orderId);
+  }
 }
 
 /**

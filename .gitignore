@@ -11,6 +11,10 @@ captures/
 # Estado operativo en runtime (folios pendientes por reversar, etc.)
 data/
 
+# Evidencias de certificación (evidencia-netpay.js) — JSON con datos de
+# transacciones, no se suben.
+evidencias/
+
 # Logs
 npm-debug.log*
 *.log

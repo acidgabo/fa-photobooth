@@ -16,7 +16,7 @@ module.exports = {
     // NetPay. Deliberadamente más largo que el timeout de 30s del frontend
     // — no debe competir con él en operación normal, solo debe rescatar la
     // sesión si el frontend nunca llegó a intentarlo.
-    paymentTimeoutMs: parseInt(process.env.PAYMENT_TIMEOUT_MS || '180000', 10),
+    paymentTimeoutMs: parseInt(process.env.PAYMENT_TIMEOUT_MS || '360000', 10),
     // Cuánto esperar en 'booth_running' SIN NINGÚN evento nuevo de dslrBooth
     // (se reinicia con cada evento que llega — countdown, capture_start,
     // printing, etc. — así que esto detecta un cuelgue real a medio camino,
@@ -31,6 +31,11 @@ module.exports = {
     password: process.env.NETPAY_PASSWORD || '',
     authString: process.env.NETPAY_AUTH_STRING || '',
     grantType: process.env.NETPAY_GRANT_TYPE || 'password',
+    // Path del endpoint de token, configurable junto con la URL base y el
+    // body (NETPAY_USERNAME/PASSWORD/GRANT_TYPE/AUTH_STRING) para cambiar
+    // entre pruebas y producción sin tocar código (pregunta del cuestionario
+    // de certificación sobre el cambio de ambiente).
+    tokenPath: process.env.NETPAY_TOKEN_PATH || '/oauth-service/oauth/token',
     serialNumber: process.env.NETPAY_SERIAL_NUMBER || '',
     storeId: process.env.NETPAY_STORE_ID || '',
     webhookPath: process.env.NETPAY_WEBHOOK_PATH || '/webhooks/netpay',
@@ -44,6 +49,14 @@ module.exports = {
     // mientras se sigue validando la integración contra la terminal real.
     // Debe quedar en false (o sin definir) en producción.
     debugLog: process.env.NETPAY_DEBUG_LOG === 'true',
+    // SOLO PARA LA SESIÓN DE CERTIFICACIÓN: permite que POST /api/pay cobre
+    // un monto capturado a mano en vez del precio del catálogo. La matriz de
+    // NetPay pide montos específicos (contactless > $10,001 / > $1,200 /
+    // $1–$999, firma > $1,000, regla de fraude > $12,000). Con esto en true
+    // el kiosco pide el monto al tocar el paquete. Debe quedar en false
+    // (o sin definir) en producción: con false se ignora cualquier "amount"
+    // que mande el navegador.
+    certCustomAmount: process.env.CERT_CUSTOM_AMOUNT === 'true',
     // true cuando NETPAY_BASE_URL apunta al mock local
     // (mocks/mock-netpay.js, por default http://localhost:5001) en vez de
     // al sandbox/producción real de NetPay. El frontend lo lee vía

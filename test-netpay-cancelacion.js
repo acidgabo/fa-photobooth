@@ -28,6 +28,11 @@
  *  - Solo ventas del mismo día y antes de las 8:00 p.m. CDMX; después el
  *    backend ni siquiera envía la petición (cancel_window_closed).
  *  - Siempre por el monto completo.
+ *  - No se cancela dos veces la misma venta: si el log ya la tiene como
+ *    cancelada (already_cancelled) o hay una cancelación enviada hace menos
+ *    de 3 min sin respuesta (cancel_in_progress), no se envía nada
+ *    (escenarios de certificación "Cancelación con multi-instancias" y
+ *    "Evitar la cancelación de una venta cancelada desde el POS").
  *
  * Qué revisar en la consola del backend: un webhook con transType "V" y
  * responseCode "00". Como esta cancelación no la inició el backend, llega
@@ -38,6 +43,7 @@ const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
 const netpayService = require('./src/services/netpayService');
+const netpayLog = require('./src/services/netpayLog');
 
 const LOG_PATH = path.join(__dirname, 'logs', 'netpay-transacciones.log');
 
@@ -149,11 +155,21 @@ function ask(question) {
     if (cdmxDate(new Date(sale.at)) !== today) {
       console.warn('OJO: la venta no es de hoy — NetPay solo cancela ventas del mismo día; probablemente la rechace.');
     }
-    if (cancelled.has(orderId)) {
-      console.warn('OJO: según el log esta venta YA fue cancelada.');
-    }
   } else {
     console.log(`orderId=${orderId} (no está en el log local; se envía tal cual).`);
+  }
+
+  // Antes de preguntar: si la venta ya está cancelada o tiene una
+  // cancelación en curso, no tiene caso ofrecer enviarla (cancelSale()
+  // también lo bloquea, esto solo da el mensaje claro antes).
+  const cancelState = netpayLog.findCancelState(orderId);
+  if (cancelState === 'cancelled') {
+    console.error(`No se envió: según el log la venta ${orderId} YA está cancelada.`);
+    process.exit(1);
+  }
+  if (cancelState === 'pending') {
+    console.error(`No se envió: ya hay una cancelación en curso para ${orderId} (sin respuesta todavía). Espera el webhook "V".`);
+    process.exit(1);
   }
 
   if (!args.yes) {
@@ -176,6 +192,8 @@ function ask(question) {
   } catch (err) {
     if (err.code === 'cancel_window_closed') {
       console.error('No se envió: ya pasaron las 8:00 p.m. CDMX. Esta venta requiere reverso manual con NetPay.');
+    } else if (err.code === 'already_cancelled' || err.code === 'cancel_in_progress') {
+      console.error(`No se envió: ${err.message}`);
     } else {
       console.error('La cancelación FALLÓ al enviarse:', err.message);
       if (err.response) console.error('Respuesta HTTP:', err.response.status, JSON.stringify(err.response.data));

@@ -25,7 +25,8 @@
     "ignore": [
       "data/*",
       "logs/*",
-      "captures/*"
+      "captures/*",
+      "evidencias/*"
     ]
   }
 }

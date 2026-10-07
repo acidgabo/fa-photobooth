@@ -23,10 +23,16 @@ const ORPHAN_LOG_PATH = path.join(__dirname, '..', '..', 'logs', 'cobros-huerfan
 // archivo donde netpayService.js registra las peticiones que salen hacia
 // NetPay (ver services/netpayLog.js) — cubre el requisito de certificación
 // "Implementación de logging en el punto de venta" sin depender de
-// NETPAY_DEBUG_LOG. Solo campos útiles para conciliar; nada de datos
-// sensibles de la tarjeta (cardNumber ya son solo los últimos 4).
-// traceability se guarda para comprobar que la terminal regresa lo que le
-// mandamos.
+// NETPAY_DEBUG_LOG.
+// - "raw": el body COMPLETO tal como lo mandó la terminal, sin filtrar,
+//   descartar ni truncar campos. La certificación lo exige ("la respuesta
+//   completa y sin alteraciones", registrada antes de cualquier
+//   procesamiento): ante un caso de soporte, lo primero que NetPay compara
+//   es lo que envió contra lo que registró el comercio. También es el JSON
+//   que se entrega como evidencia de cada escenario (ver
+//   evidencia-netpay.js). cardNumber ya viene enmascarado (últimos 4).
+// - Los campos de LOGGED_FIELDS se copian además al primer nivel para poder
+//   filtrar el log fácil (test-netpay-cancelacion.js --list, etc.).
 const LOGGED_FIELDS = [
   'transType', 'isRePrint', 'reprintModule', 'responseCode', 'message', 'folioNumber', 'orderId',
   'amount', 'authCode', 'cardNumber', 'transactionId', 'rrnNumber', 'transDate', 'traceability',
@@ -37,6 +43,7 @@ function logTransaction(kind, body) {
   for (const field of LOGGED_FIELDS) {
     if (body[field] !== undefined) entry[field] = body[field];
   }
+  entry.raw = body;
   netpayLog.append(entry);
 }
 
@@ -112,6 +119,8 @@ router.post('/netpay', async (req, res) => {
     console.log('[webhook] body completo recibido de Netpay:', JSON.stringify(req.body, null, 2));
   }
 
+  // Lo primero que se hace con la respuesta es registrarla íntegra (ver
+  // logTransaction); classifyTerminalResponse() solo decide la etiqueta.
   const kind = classifyTerminalResponse(req.body);
   logTransaction(kind, req.body);
 
