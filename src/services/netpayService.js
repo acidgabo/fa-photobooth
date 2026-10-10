@@ -206,7 +206,15 @@ async function pushToTerminal(op, pathSuffix, body) {
 }
 
 async function sendToTerminal(pathSuffix, body, attempt) {
-  const token = await getAccessToken();
+  let token;
+  try {
+    token = await getAccessToken();
+  } catch (err) {
+    // Falla al pedir el token: la operación NUNCA se envió a la terminal.
+    // payment.js usa esta marca para no confundirla con una venta ambigua.
+    err.netpayStage = 'token';
+    throw err;
+  }
 
   let response;
   try {
@@ -403,7 +411,23 @@ async function reprintByFolio({ folioId, print = false }) {
   });
 }
 
+/**
+ * ¿La venta pudo haber llegado a la terminal aunque la petición falló?
+ * (pendiente A4, 10-oct-2026). Ambigua = la petición de venta salió pero no
+ * hubo respuesta HTTP (timeout, conexión cortada) o NetPay respondió 504
+ * (gateway timeout). No es ambigua si falló al pedir el token (la venta no
+ * se envió) ni si NetPay respondió con un rechazo claro (code distinto de
+ * "00", 4xx, otros 5xx).
+ */
+function isAmbiguousPushError(err) {
+  if (!err || err.netpayStage === 'token') return false;
+  if (typeof err.code === 'string' && err.code.startsWith('netpay_')) return false;
+  if (!err.response) return true;
+  return err.response.status === 504;
+}
+
 module.exports = {
+  isAmbiguousPushError,
   getAccessToken,
   createSale,
   cancelSale,

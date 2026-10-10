@@ -94,7 +94,14 @@ router.post('/pay', async (req, res) => {
     return res.status(409).json({ error: 'Ya hay un pago en curso', code: 'session_in_progress', orderId: current.orderId });
   }
 
-  const orderId = `order_${Date.now()}`;
+  // Folio = <BOOTH_ID>_<timestamp en ms>, p. ej. "cabina-1_1790533514915"
+  // (10-oct-2026; antes "order_<timestamp>"). Incluir la cabina hace el folio
+  // único entre sucursales (pregunta #15 de la certificación NetPay). Hoy
+  // hay UNA sola cabina (BOOTH_ID default "cabina-1"); al instalar otra,
+  // cada una debe tener su propio BOOTH_ID en el .env. Se limpia a
+  // [A-Za-z0-9-] para que el folio no lleve espacios ni caracteres raros.
+  const boothPrefix = String(config.netpay.boothId || 'cabina-1').replace(/[^A-Za-z0-9-]/g, '') || 'cabina-1';
+  const orderId = `${boothPrefix}_${Date.now()}`;
   sessionState.set({
     status: 'awaiting_payment',
     package: pkg.name,
@@ -110,10 +117,26 @@ router.post('/pay', async (req, res) => {
     await netpayService.createSale({ amount, orderId, packageId: packageForTrace });
     res.status(202).json({ orderId, status: 'awaiting_payment' });
   } catch (err) {
-    // TODO (A4, pendiente): distinguir un error ambiguo (timeout / sin
-    // respuesta HTTP: la terminal pudo haber recibido la venta) de un
-    // rechazo claro (code distinto de "00", p. ej. "19" terminal no
-    // encontrada). Hoy ambos marcan la sesión como error.
+    // A4 (10-oct-2026): error AMBIGUO = la venta pudo haber llegado a la
+    // terminal (timeout / conexión cortada sin respuesta HTTP, o 504). No se
+    // marca error: la sesión sigue en "awaiting_payment" y el frontend se
+    // queda en "Procesando pago". Si el cliente paga, el webhook llega y la
+    // sesión arranca normal. Si no llega nada, el watchdog (6 min) consulta
+    // el folio por reimpresión: aprobada (C) → cancelación automática; sin
+    // datos / declinada → se cierra sin cobro. Antes, con la sesión ya en
+    // "error", un cobro aprobado que llegaba después se ignoraba y quedaba
+    // vigente.
+    if (netpayService.isAmbiguousPushError(err)) {
+      console.warn(
+        `[payment] respuesta AMBIGUA al enviar la venta (folio ${orderId}): ${err.message} — ` +
+          'la venta pudo llegar a la terminal; se sigue esperando el webhook (el watchdog consulta el folio si no llega)'
+      );
+      return res.status(202).json({ orderId, status: 'awaiting_payment', ambiguous: true });
+    }
+
+    // Rechazo CLARO (code distinto de "00" como "19" terminal no
+    // encontrada, 4xx, otros 5xx, o falla al pedir el token): la venta no
+    // llegó a la terminal.
     console.error(`[payment] no se pudo iniciar el cobro (folio ${orderId}): ${err.message}`);
     sessionState.set({ status: 'error', error: err.message });
     // El frontend muestra "error" tal cual al cliente (+ "verifica tu
