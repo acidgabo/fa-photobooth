@@ -1,6 +1,6 @@
 {
   "name": "photobooth-backend",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Backend de orquestación: pantalla táctil -> NetPay A910 -> dslrBooth (LumaBooth for Windows)",
   "main": "src/server.js",
   "engines": {
