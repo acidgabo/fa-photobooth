@@ -606,6 +606,10 @@
                 // de mostrar/quitar la pantalla 6 sola; aquí solo evitamos cobrar.
                 if (err.message === 'hardware_unavailable') {
                     showError('La cabina no puede procesar tu sesión en este momento.<br>Intenta de nuevo en unos minutos.');
+                } else if (/^Monto de prueba inválido/.test(err.message || '')) {
+                    // Solo modo certificación (CERT_CUSTOM_AMOUNT): no es un
+                    // problema de la tarjeta, así que sin el sufijo de abajo.
+                    showError(err.message + '<br>Captura un monto mayor a 0, por ejemplo 5 o 12001');
                 } else {
                     showError((err.message || 'No se pudo procesar el pago') + '<br>verifica tu tarjeta e intenta de nuevo');
                 }
