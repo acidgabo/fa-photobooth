@@ -73,6 +73,18 @@ function classifyTerminalResponse(body) {
   return 'sale';
 }
 
+// ¿Esta venta aprobada ya había llegado antes? logTransaction() registra la
+// respuesta actual ANTES de procesarla, así que una venta nueva aparece una
+// sola vez en la bitácora; dos o más líneas "sale" con "00" para el mismo
+// folio = la terminal reentregó una respuesta que ya se procesó.
+function isDuplicateApprovedSale(folioNumber) {
+  if (!folioNumber) return false;
+  const approved = netpayLog
+    .readEntries()
+    .filter((e) => e.kind === 'sale' && e.folioNumber === folioNumber && e.responseCode === '00');
+  return approved.length > 1;
+}
+
 function logOrphanCharge(detail) {
   try {
     fs.mkdirSync(path.dirname(ORPHAN_LOG_PATH), { recursive: true });
@@ -144,6 +156,39 @@ router.post('/netpay', async (req, res) => {
   const { folioNumber, orderId: terminalOrderId, responseCode, message: netpayMessage } = req.body;
 
   const current = sessionState.get();
+
+  // A5 — venta APROBADA que llega cuando el kiosco ya dejó de esperarla.
+  // Confirmado en el ensayo del 11-oct-2026 (escenario 17.1 de la matriz):
+  // la terminal se quedó en la pantalla del segundo voucher más de 6 min, el
+  // watchdog dio la sesión por perdida, la consulta por folio no tuvo
+  // respuesta (la terminal seguía ocupada) y la venta aprobada llegó
+  // después, sin sesión que la recibiera. El cliente ya no recibe el
+  // servicio, así que se cancela al momento. Aplica a los dos casos:
+  //  - ya no hay sesión con ese folio (el kiosco volvió al inicio), y
+  //  - la sesión de ese folio sigue en "error" (aún no se reinicia).
+  // No aplica a una entrega duplicada de una venta que ya se procesó
+  // (sesión del mismo folio en payment_confirmed/booth_running, o una
+  // respuesta "00" de ese folio ya registrada antes en la bitácora): esa sí
+  // se entregó y no se toca.
+  const lateApproved =
+    responseCode === '00' &&
+    !(current.orderId === folioNumber && current.status === 'awaiting_payment') &&
+    !(current.orderId === folioNumber && ['payment_confirmed', 'booth_running'].includes(current.status)) &&
+    !isDuplicateApprovedSale(folioNumber);
+
+  if (lateApproved) {
+    const detail =
+      `folioNumber="${folioNumber}" orderIdActual="${current.orderId}" estadoActual="${current.status}" ` +
+      `amount=${req.body.amount || '?'} MXN authCode=${req.body.authCode || '?'} ` +
+      `transactionId=${req.body.transactionId || '?'} cardNumber=****${req.body.cardNumber || '?'}`;
+    console.error(
+      `[webhook] VENTA APROBADA TARDE — ${detail}. El kiosco ya no la estaba esperando: se cancela automáticamente.`
+    );
+    logOrphanCharge(`APROBADA TARDE (cancelación automática) ${detail}`);
+    autoCancelSale(terminalOrderId, 'venta aprobada tarde (el kiosco ya no la esperaba)', { folioNumber });
+    return res.status(200).json(NETPAY_ACK);
+  }
+
   if (current.orderId !== folioNumber) {
     if (responseCode === '00') {
       // Cobro real y EXITOSO que no corresponde a ninguna sesión activa: el
