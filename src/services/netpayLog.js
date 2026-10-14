@@ -97,4 +97,47 @@ function findCancelState(orderId, { pendingWindowMs = 180000, now = Date.now() }
   return null;
 }
 
-module.exports = { append, readEntries, findCancelState, TRANSACTIONS_LOG_PATH };
+/**
+ * ¿Hay una reimpresión de esta venta enviada hace poco y todavía sin
+ * respuesta? Lo usa test-netpay-reimpresion.js (herramienta del operador)
+ * para no mandar reimpresiones duplicadas si se lanza varias veces seguidas
+ * (escenarios de certificación "Reimpresión … con MULTI-INSTANCIAS").
+ * Cuenta tanto las reimpresiones manuales como las automáticas del manejo
+ * de reversos, porque todas pasan por el mismo log. Regresa los ms desde el
+ * envío, o null si no hay ninguna en curso.
+ *  - Por folio: petición con ese folioNumber y sin orderId; la contesta una
+ *    respuesta "reprint" de ese folio o un "reprint_not_found" (que llega
+ *    sin folio).
+ *  - Por orderId: petición con ese orderId; la contesta una respuesta
+ *    "reprint" con ese orderId.
+ */
+function findReprintInFlight({ folio, orderId }, { windowMs = 60000, now = Date.now() } = {}) {
+  if (!folio && !orderId) return null;
+  let lastSentAt = null;
+  let answered = false;
+  for (const e of readEntries()) {
+    const isRequest =
+      e.kind === 'request' &&
+      e.op === 'reprint' &&
+      e.sent !== false &&
+      (orderId ? e.orderId === orderId : e.folioNumber === folio && !e.orderId);
+    if (isRequest) {
+      if (e.ok === false) {
+        // El envío falló (la terminal no recibió nada): no hay nada en curso.
+        lastSentAt = null;
+      } else {
+        lastSentAt = Date.parse(e.at);
+        answered = false;
+      }
+      continue;
+    }
+    if (lastSentAt === null) continue;
+    if (e.kind === 'reprint' && (orderId ? e.orderId === orderId : e.folioNumber === folio)) answered = true;
+    else if (!orderId && e.kind === 'reprint_not_found') answered = true;
+  }
+  if (lastSentAt === null || answered) return null;
+  const elapsed = now - lastSentAt;
+  return elapsed < windowMs ? elapsed : null;
+}
+
+module.exports = { append, readEntries, findCancelState, findReprintInFlight, TRANSACTIONS_LOG_PATH };

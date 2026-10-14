@@ -17,11 +17,15 @@
  *   --print   además imprime el ticket en la terminal (por default NO, solo
  *             manda el JSON por webhook).
  *
+ * Multi-instancias: si ya hay una reimpresión de la misma venta enviada hace
+ * menos de 60 s y sin respuesta, el script NO manda otra ("BLOQUEADA").
+ *
  * Qué revisar en la consola del backend: un "[webhook] body completo..." con
  * isRePrint: true, y la línea "[webhook] respuesta de REIMPRESIÓN" con el
  * reprintModule. Todo queda también en logs/netpay-transacciones.log.
  */
 const netpayService = require('./src/services/netpayService');
+const netpayLog = require('./src/services/netpayLog');
 
 function parseArgs(argv) {
   const args = { print: false };
@@ -38,6 +42,32 @@ function parseArgs(argv) {
 
   if ((!folio && !order) || (folio && order)) {
     console.error('Indica exactamente uno: --folio <folioNumber> o --order <orderId de la terminal>');
+    process.exit(1);
+  }
+
+  // Bloqueo de multi-instancias (escenarios 9 y 10 de la certificación):
+  // si ya se mandó una reimpresión de esta misma venta hace menos de 60 s
+  // y la terminal todavía no contesta, no se manda otra. Queda registrado
+  // en la bitácora con sent:false.
+  const inFlightMs = netpayLog.findReprintInFlight(folio ? { folio } : { orderId: order });
+  if (inFlightMs !== null) {
+    const id = folio ? `folio "${folio}"` : `orderId "${order}"`;
+    netpayLog.append({
+      kind: 'request',
+      op: 'reprint',
+      endpoint: '/integration-service/transactions/reprint',
+      folioNumber: folio || undefined,
+      orderId: order || undefined,
+      print,
+      ok: false,
+      sent: false,
+      error: 'reprint_in_progress',
+      message: `ya hay una reimpresión en curso para ${id}`,
+    });
+    console.error(
+      `BLOQUEADA: ya hay una reimpresión en curso para ${id} (enviada hace ${Math.round(inFlightMs / 1000)} s, ` +
+        'sin respuesta todavía). No se envía otra; espera la respuesta en la consola del backend.'
+    );
     process.exit(1);
   }
 

@@ -21,6 +21,15 @@
  *            orderId de la terminal (cancelación, reimpresión por orderId).
  *   --order  orderId de la terminal (para cancelaciones / reimpresiones).
  *   --name   nombre del escenario, se usa en el nombre del archivo.
+ *   --raw    en vez de guardar el archivo, imprime SOLO el JSON íntegro de
+ *            la última respuesta de la terminal para ese folio/orderId —
+ *            lo que va en la columna "JSON ORIGINAL" de la pestaña Pruebas.
+ *            Con --tipo venta|cancelacion|reimpresion elige cuál (por
+ *            default, la última de cualquier tipo). En Windows lo copia
+ *            además al portapapeles, listo para pegar en la matriz:
+ *
+ *              node evidencia-netpay.js --folio cabina-1_1791752171073 --raw
+ *              node evidencia-netpay.js --order 261011145642-2840746993 --raw --tipo cancelacion
  *
  * Salida: evidencias/<fecha>_<nombre o folio>.json (la carpeta está en
  * .gitignore). En "respuestas" va cada body tal como lo mandó la terminal
@@ -40,6 +49,8 @@ function parseArgs(argv) {
     else if (argv[i] === '--order') args.order = argv[++i];
     else if (argv[i] === '--name') args.name = argv[++i];
     else if (argv[i] === '--list') args.list = true;
+    else if (argv[i] === '--raw') args.raw = true;
+    else if (argv[i] === '--tipo') args.tipo = argv[++i];
   }
   return args;
 }
@@ -118,6 +129,56 @@ function existingEvidenceFor(id) {
   });
 }
 
+const TIPOS = { venta: 'sale', cancelacion: 'cancel', reimpresion: 'reprint' };
+
+// Copia texto al portapapeles de Windows sin perder acentos (UTF-8 →
+// Set-Clipboard). En otros sistemas no hace nada. Nunca tira error.
+function copyToClipboard(text) {
+  if (process.platform !== 'win32') return false;
+  try {
+    const { spawnSync } = require('child_process');
+    const os = require('os');
+    const tmp = path.join(os.tmpdir(), `netpay-json-${Date.now()}.json`);
+    fs.writeFileSync(tmp, text, 'utf8');
+    const r = spawnSync(
+      'powershell',
+      ['-NoProfile', '-Command', 'Set-Clipboard -Value ([IO.File]::ReadAllText($env:NETPAY_JSON_FILE, [Text.Encoding]::UTF8))'],
+      { env: { ...process.env, NETPAY_JSON_FILE: tmp }, stdio: 'ignore' }
+    );
+    fs.unlinkSync(tmp);
+    return r.status === 0;
+  } catch (_) {
+    return false;
+  }
+}
+
+function printRaw(related, args) {
+  let responses = related.filter((e) => e.kind !== 'request');
+  if (args.tipo) {
+    const kind = TIPOS[args.tipo];
+    if (!kind) {
+      console.error(`--tipo debe ser uno de: ${Object.keys(TIPOS).join(', ')}`);
+      process.exit(1);
+    }
+    responses = responses.filter((e) => e.kind === kind);
+  }
+  const last = responses[responses.length - 1];
+  if (!last) {
+    console.error(`No hay respuestas de la terminal${args.tipo ? ` de tipo ${args.tipo}` : ''} para ${args.folio || args.order}.`);
+    process.exit(1);
+  }
+  if (!last.raw) {
+    console.error('Esa respuesta se registró antes de que el log guardara el body completo (sin "raw").');
+    process.exit(1);
+  }
+  const text = JSON.stringify(last.raw, null, 2);
+  console.log(text);
+  const copied = copyToClipboard(text);
+  console.error(
+    `\n(${last.kind} de las ${cdmxTime(last.at)}${copied ? ' — copiado al portapapeles, pégalo en la columna "JSON ORIGINAL"' : ''})`
+  );
+}
+
 function list(entries) {
   const today = cdmxDate(new Date());
   const rows = entries.filter((e) => e.kind !== 'request' && cdmxDate(new Date(e.at)) === today);
@@ -155,6 +216,11 @@ function list(entries) {
   if (related.length === 0) {
     console.error(`No hay nada en ${netpayLog.TRANSACTIONS_LOG_PATH} para ${args.folio || args.order}.`);
     process.exit(1);
+  }
+
+  if (args.raw) {
+    printRaw(related, args);
+    return;
   }
 
   const evidence = toEvidence(related, args);
