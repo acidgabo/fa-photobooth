@@ -842,10 +842,15 @@
             } else if (r.type === 'NF') {
                 // La terminal confirma que no tiene registro de la venta:
                 // el cobro nunca se autorizó (p.ej. tarjeta retirada antes
-                // de tiempo), así que no hubo cargo ni reverso que hacer.
-                title = 'No se realizó ningún cargo';
-                body = 'La terminal no pudo leer tu tarjeta y no registró la operación.<br>' +
-                    'Mantén tu tarjeta en la terminal hasta que termine y vuelve a intentarlo.';
+                // de tiempo), así que no hubo cobro ni reverso que hacer.
+                // Se muestran tal cual el mensaje original de la venta y el
+                // de la consulta por folio, más la aclaración de que no hubo
+                // cobro (pedido en la junta del 15-oct).
+                const lines = [];
+                if (state.declinedMessage) lines.push(escapeHtml(state.declinedMessage));
+                lines.push(escapeHtml(r.message));
+                lines.push('No se realizó ningún cobro');
+                return lines.join('<br>');
             } else {
                 title = 'Transacción reversada';
                 body = 'No se realizó ningún cargo a tu tarjeta.<br>' +
