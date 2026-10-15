@@ -9,9 +9,14 @@ const dslrboothRoutes = require('./routes/dslrbooth');
 const sessionRoutes = require('./routes/session');
 const diagnosticsRoutes = require('./routes/diagnostics');
 const hardwareWatch = require('./hardwareWatch');
+const { lenientNetpayBody } = require('./middleware/netpayBody');
 
 const app = express();
 app.use(cors());
+// Webhook de NetPay: se lee como texto y se parsea con tolerancia (ver
+// middleware/netpayBody.js). Va ANTES de express.json(), que ya no lo
+// vuelve a leer porque express.text() marca el body como consumido.
+app.use('/webhooks/netpay', express.text({ type: () => true, limit: '1mb' }), lenientNetpayBody);
 app.use(express.json());
 
 app.get('/health', (req, res) => res.json({ ok: true }));
