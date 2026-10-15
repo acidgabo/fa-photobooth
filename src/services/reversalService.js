@@ -226,7 +226,9 @@ function showReversalOnKiosk(type, body) {
   sessionState.set({
     reversal: {
       type,
-      message: body.message || (type === 'RV' ? 'Transacción Reversada' : 'Transacción Pendiente por Reversar'),
+      message:
+        body.message ||
+        (type === 'RV' ? 'Transacción Reversada' : type === 'PRV' ? 'Transacción Pendiente por Reversar' : 'No se encontraron datos'),
       folio: body.folioNumber,
       amount: body.amount || null,
       card: body.cardNumber || null,
@@ -361,6 +363,7 @@ function handleNotFound(body) {
     `[reversalService] la terminal no tiene registro de la venta — folio=${folio} (motivo: ${origin}): ` +
       `nunca le llegó, sin cobro`
   );
+  showReversalOnKiosk('NF', { folioNumber: folio, message: body.message });
   if (pendingEntry) {
     // Ya habíamos avisado 🟠 por este folio — cerrar el pendiente en el canal.
     notifyService.notifyReversalNotFound(

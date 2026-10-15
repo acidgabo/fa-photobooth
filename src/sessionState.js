@@ -46,7 +46,7 @@ let state = {
   declinedMessage: null,
   // Resultado de la consulta del folio cuando la venta declinada (o sin
   // respuesta) resultó ser un reverso — lo escribe reversalService.js:
-  // { type: 'RV'|'PRV', message, folio, amount, card, at }. El frontend lo
+  // { type: 'RV'|'PRV'|'NF' (NF = la terminal no tiene registro: sin cobro), message, folio, amount, card, at }. El frontend lo
   // muestra en la pantalla de error. null = sin información de reverso.
   reversal: null,
   // Grupo 4 de la taxonomía de fallas: ¿vimos el Trigger "printing" en

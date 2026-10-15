@@ -833,14 +833,24 @@
 
         function reversalHtml(state) {
             const r = state.reversal;
-            const pending = r.type === 'PRV';
-            const title = pending ? 'Transacción pendiente por reversar' : 'Transacción reversada';
-            const body = pending
-                ? 'Tu pago no se completó y está pendiente de reversarse.<br>' +
-                  'El cargo no debe aplicarse; se cancela en la siguiente operación de la terminal.<br>' +
-                  'Si lo ves reflejado, aclara con el folio de abajo.'
-                : 'No se realizó ningún cargo a tu tarjeta.<br>' +
-                  'Mantén tu tarjeta en la terminal hasta que termine y vuelve a intentarlo.';
+            let title, body;
+            if (r.type === 'PRV') {
+                title = 'Transacción pendiente por reversar';
+                body = 'Tu pago no se completó y está pendiente de reversarse.<br>' +
+                    'El cargo no debe aplicarse; se cancela en la siguiente operación de la terminal.<br>' +
+                    'Si lo ves reflejado, aclara con el folio de abajo.';
+            } else if (r.type === 'NF') {
+                // La terminal confirma que no tiene registro de la venta:
+                // el cobro nunca se autorizó (p.ej. tarjeta retirada antes
+                // de tiempo), así que no hubo cargo ni reverso que hacer.
+                title = 'No se realizó ningún cargo';
+                body = 'La terminal no pudo leer tu tarjeta y no registró la operación.<br>' +
+                    'Mantén tu tarjeta en la terminal hasta que termine y vuelve a intentarlo.';
+            } else {
+                title = 'Transacción reversada';
+                body = 'No se realizó ningún cargo a tu tarjeta.<br>' +
+                    'Mantén tu tarjeta en la terminal hasta que termine y vuelve a intentarlo.';
+            }
 
             const parts = [];
             if (state.declinedCode) parts.push('Código ' + escapeHtml(state.declinedCode));
