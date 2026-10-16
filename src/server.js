@@ -8,6 +8,7 @@ const webhookRoutes = require('./routes/webhook');
 const dslrboothRoutes = require('./routes/dslrbooth');
 const sessionRoutes = require('./routes/session');
 const diagnosticsRoutes = require('./routes/diagnostics');
+const adminRoutes = require('./routes/admin');
 const hardwareWatch = require('./hardwareWatch');
 const { lenientNetpayBody } = require('./middleware/netpayBody');
 
@@ -26,6 +27,7 @@ app.use('/api/session', sessionRoutes);
 app.use('/webhooks', webhookRoutes);
 app.use('/dslrbooth', dslrboothRoutes); // recibe los Triggers de dslrBooth
 app.use('/diagnostics', diagnosticsRoutes); // solo relevante en BOOTH_MODE=direct
+app.use('/admin', adminRoutes); // panel de reimpresiones/reversos (public/admin.html)
 
 // Pantalla táctil: un solo archivo estático, sin build. Editar directo en
 // public/index.html (o public/config.js para colores/textos).
@@ -42,6 +44,7 @@ app.listen(config.port, () => {
   console.log('  GET  /dslrbooth/events       <- dslrBooth manda triggers de sesión');
   console.log('  GET  /diagnostics/camera     <- (modo direct/windirect) confirma que la cámara está detectada');
   console.log('  GET  /diagnostics/printer    <- (modo direct/windirect) lista impresoras disponibles');
+  console.log(`Panel de reimpresiones (operador): http://localhost:${config.port}/admin.html`);
 
   // Monitoreo de hardware (cámara + impresora) — ver src/hardwareWatch.js.
   // No bloquea el arranque: si BOOTH_MODE no lo soporta, se desactiva solo.

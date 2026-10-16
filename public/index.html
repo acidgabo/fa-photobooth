@@ -349,7 +349,9 @@
     <div class="kiosk-frame">
         <!-- Screen 1: Inicio -->
         <div class="screen active" data-screen="1">
-            <div class="logo-lockup">
+            <!-- 5 toques seguidos al logo abren el panel de reimpresiones del
+                 operador (public/admin.html) — ver openAdminOnTaps(). -->
+            <div class="logo-lockup" onclick="openAdminOnTaps()">
                 <h1 class="brand-title">SMILE</h1>
                 <p class="brand-subtitle">Photobooth</p>
             </div>
@@ -460,6 +462,20 @@
             const data = await res.json().catch(() => ({}));
             if (!res.ok) throw new Error(data.error || 'Error ' + res.status);
             return data;
+        }
+
+        // Acceso escondido al panel de reimpresiones/reversos (pendiente 1 de
+        // la certificación NetPay): 5 toques al logo en menos de 3 s. El
+        // panel pide PIN si ADMIN_PIN está definido en .env.
+        let adminTaps = [];
+        function openAdminOnTaps() {
+            const now = Date.now();
+            adminTaps = adminTaps.filter((t) => now - t < 3000);
+            adminTaps.push(now);
+            if (adminTaps.length >= 5) {
+                adminTaps = [];
+                window.location.href = '/admin.html';
+            }
         }
 
         function goToScreen(screenNum) {

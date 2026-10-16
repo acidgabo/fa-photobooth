@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Reimpresiones · Smile Photobooth</title>
+    <!--
+      Panel del operador para reimpresiones y reversos (pendiente 1 de la
+      certificación NetPay, 15-oct-2026). Lee GET /admin/api/state y manda
+      las consultas por POST /admin/api/consultar (folio) o
+      /admin/api/reimprimir-orden (orderId) — ver src/routes/admin.js.
+      Se abre desde el kiosco tocando 5 veces el logo de la pantalla de
+      inicio, o directo en http://localhost:4000/admin.html.
+    -->
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        :root {
+            --bg: #f4f4f4;
+            --surface: #ffffff;
+            --ink: #1c1c1c;
+            --muted: #6b6560;
+            --line: #e2dfdc;
+            --charcoal: #46413d;
+            --charcoal-dark: #322e2b;
+            --ok: #2f7d4f;
+            --ok-bg: #e5f3ea;
+            --warn: #9a5b00;
+            --warn-bg: #fff1d6;
+            --bad: #a83232;
+            --bad-bg: #fbe6e6;
+            --info: #2d5f8a;
+            --info-bg: #e3eef7;
+            --neutral-bg: #ecebea;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: var(--bg);
+            color: var(--ink);
+            font-size: 16px;
+            line-height: 1.4;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        header {
+            position: sticky; top: 0; z-index: 5;
+            background: var(--charcoal-dark);
+            color: #fff;
+            padding: 14px 20px;
+            display: flex; flex-wrap: wrap; align-items: center; gap: 12px;
+        }
+        header h1 { font-size: 20px; font-weight: 700; margin-right: auto; }
+        header .chip { background: rgba(255,255,255,.14); color: #fff; }
+
+        main { max-width: 1100px; margin: 0 auto; padding: 18px 16px 80px; }
+
+        h2 {
+            font-size: 15px; text-transform: uppercase; letter-spacing: .06em;
+            color: var(--muted); margin: 22px 0 10px;
+            display: flex; align-items: baseline; gap: 10px;
+        }
+        h2 small { text-transform: none; letter-spacing: 0; font-weight: 400; }
+
+        button {
+            font: inherit; font-weight: 600; cursor: pointer;
+            border: 0; border-radius: 10px;
+            padding: 12px 16px; min-height: 48px;
+            background: var(--charcoal); color: #fff;
+        }
+        button.secondary { background: var(--surface); color: var(--charcoal); border: 1.5px solid var(--charcoal); }
+        button.ghost { background: transparent; color: #fff; border: 1.5px solid rgba(255,255,255,.5); }
+        button.danger { background: var(--surface); color: var(--bad); border: 1.5px solid var(--bad); }
+        button:disabled { opacity: .45; cursor: not-allowed; }
+
+        .chip {
+            display: inline-block; padding: 4px 10px; border-radius: 999px;
+            font-size: 13px; font-weight: 600; white-space: nowrap;
+            background: var(--neutral-bg); color: var(--charcoal);
+        }
+        .chip.C  { background: var(--ok-bg); color: var(--ok); }
+        .chip.V, .chip.NF { background: var(--neutral-bg); color: var(--charcoal); }
+        .chip.RV { background: var(--info-bg); color: var(--info); }
+        .chip.PRV, .chip.SR { background: var(--warn-bg); color: var(--warn); }
+        .chip.D  { background: var(--bad-bg); color: var(--bad); }
+
+        .banner {
+            margin-top: 14px; padding: 12px 16px; border-radius: 10px;
+            background: var(--warn-bg); color: var(--warn); font-weight: 600;
+        }
+        .banner.hidden { display: none; }
+
+        .empty { color: var(--muted); padding: 14px 4px; }
+
+        .card, .row {
+            background: var(--surface); border: 1px solid var(--line);
+            border-radius: 12px; padding: 14px 16px; margin-bottom: 10px;
+        }
+        .card.pending { border-left: 6px solid var(--warn); }
+
+        .row { display: grid; grid-template-columns: 70px 1fr auto; gap: 6px 14px; align-items: center; }
+        .row .time { font-variant-numeric: tabular-nums; font-weight: 600; }
+        .row .main { min-width: 0; }
+        .row .folio { font-family: Consolas, 'Courier New', monospace; font-size: 14px; overflow-wrap: anywhere; }
+        .row .sub { color: var(--muted); font-size: 14px; }
+        .row .actions, .card .actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+        .card .actions { justify-content: flex-start; margin-top: 12px; }
+        .row .open { grid-column: 1 / -1; justify-self: start; padding: 0; min-height: 0; background: none; color: var(--info); font-weight: 600; text-decoration: underline; }
+
+        .working { color: var(--info); font-weight: 600; font-size: 14px; }
+
+        @media (max-width: 700px) {
+            .row { grid-template-columns: 1fr; }
+            .row .actions { justify-content: flex-start; }
+        }
+
+        /* Detalle */
+        .sheet-bg { position: fixed; inset: 0; background: rgba(28,28,28,.45); z-index: 10; display: none; }
+        .sheet {
+            position: fixed; top: 0; right: 0; bottom: 0; width: min(720px, 100%);
+            background: var(--bg); z-index: 11; overflow-y: auto;
+            transform: translateX(100%); transition: transform .2s ease;
+            padding: 18px 18px 60px;
+        }
+        .sheet.open { transform: none; }
+        .sheet-bg.open { display: block; }
+        .sheet h3 { font-size: 18px; margin-bottom: 4px; overflow-wrap: anywhere; }
+        .voucher {
+            background: var(--surface); border: 1px dashed var(--charcoal);
+            border-radius: 10px; padding: 14px 16px; margin: 14px 0;
+            font-family: Consolas, 'Courier New', monospace; font-size: 15px;
+        }
+        .voucher div + div { margin-top: 4px; }
+        .event { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; margin-bottom: 8px; }
+        .event summary { padding: 12px 14px; cursor: pointer; display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+        .event pre {
+            margin: 0 14px 12px; padding: 12px; background: #1f1d1b; color: #f1eee9;
+            border-radius: 8px; font-size: 12.5px; overflow-x: auto; max-height: 360px;
+        }
+        .event .copy { margin: 0 14px 14px; }
+
+        /* PIN */
+        .pin-gate { position: fixed; inset: 0; background: var(--bg); z-index: 20; display: none; align-items: center; justify-content: center; padding: 16px; }
+        .pin-gate.open { display: flex; }
+        .pin-box { background: var(--surface); border-radius: 14px; padding: 24px; width: min(360px, 100%); border: 1px solid var(--line); }
+        .pin-box h3 { margin-bottom: 12px; }
+        .pin-box input { width: 100%; font-size: 24px; padding: 10px 12px; border: 1.5px solid var(--line); border-radius: 10px; margin-bottom: 12px; letter-spacing: .3em; }
+        .pin-box .err { color: var(--bad); min-height: 22px; font-size: 14px; }
+
+        .toast {
+            position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%);
+            background: var(--charcoal-dark); color: #fff; padding: 12px 18px; border-radius: 10px;
+            max-width: calc(100% - 32px); z-index: 30; display: none; font-weight: 600;
+        }
+        .toast.show { display: block; }
+        .toast.bad { background: var(--bad); }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>Reimpresiones y reversos</h1>
+        <span class="chip" id="kioskChip">Kiosco: …</span>
+        <button class="ghost" onclick="refresh()">Actualizar</button>
+        <button class="ghost" onclick="location.href='/'">Volver al kiosco</button>
+    </header>
+
+    <main>
+        <div class="banner hidden" id="busyBanner">Hay un cliente pagando en este momento. Las consultas a la terminal se activan cuando termine.</div>
+
+        <h2>Pendientes de revisar <small>PRV o sin respuesta de la terminal</small></h2>
+        <div id="pending"></div>
+
+        <h2><span>Ventas del <span id="dayLabel">día</span></span></h2>
+        <div id="transactions"></div>
+    </main>
+
+    <div class="sheet-bg" id="sheetBg" onclick="closeDetail()"></div>
+    <aside class="sheet" id="sheet" aria-label="Detalle de la transacción"></aside>
+
+    <div class="pin-gate" id="pinGate">
+        <form class="pin-box" onsubmit="submitPin(event)">
+            <h3>PIN del operador</h3>
+            <input id="pinInput" type="password" inputmode="numeric" autocomplete="off">
+            <div class="err" id="pinErr"></div>
+            <button type="submit" style="width:100%">Entrar</button>
+        </form>
+    </div>
+
+    <div class="toast" id="toast"></div>
+
+    <script>
+        const POLL_IDLE_MS = 5000;
+        const POLL_BUSY_MS = 2000;
+
+        let pin = '';
+        try { pin = sessionStorage.getItem('adminPin') || ''; } catch (_) {}
+
+        let state = null;
+        let pollTimer = null;
+        // folio u orderId -> { at: ms de envío, print } — consultas mandadas
+        // desde ESTE panel que siguen esperando respuesta (para bloquear los
+        // botones y avisar cuando llegue el resultado).
+        const sent = new Map();
+        let detailFolio = null;
+
+        const KIOSK_LABEL = {
+            idle: 'libre', awaiting_payment: 'cobrando', payment_confirmed: 'pago confirmado',
+            booth_running: 'tomando fotos', error: 'pantalla de error',
+        };
+        const PENDING_LABEL = { PRV: 'Pendiente por reversar', sin_respuesta: 'Sin respuesta de la terminal' };
+        const ORIGIN_LABEL = {
+            declined: 'venta declinada', payment_timeout: 'venta sin respuesta (timeout)', recheck: 'reconsulta', manual: 'operador',
+        };
+
+        function esc(v) {
+            return String(v == null ? '' : v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+        }
+        function hhmm(iso) {
+            if (!iso) return '—';
+            return new Date(iso).toLocaleTimeString('es-MX', { timeZone: 'America/Mexico_City', hour: '2-digit', minute: '2-digit' });
+        }
+        function fullTime(iso) {
+            if (!iso) return '—';
+            return new Date(iso).toLocaleString('es-MX', { timeZone: 'America/Mexico_City', dateStyle: 'short', timeStyle: 'medium' });
+        }
+        function money(a) {
+            const n = Number(a);
+            return Number.isFinite(n) ? '$' + n.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—';
+        }
+
+        async function api(path, options = {}) {
+            const res = await fetch('/admin/api' + path, {
+                ...options,
+                headers: { 'Content-Type': 'application/json', 'x-admin-pin': pin, ...(options.headers || {}) },
+            });
+            let body = null;
+            try { body = await res.json(); } catch (_) {}
+            if (res.status === 401) { showPinGate(body && pin ? body.message : ''); throw new Error('pin'); }
+            if (res.status === 403) { showToast((body && body.message) || 'Sin acceso', true); throw new Error('forbidden'); }
+            return { status: res.status, body: body || {} };
+        }
+
+        function showPinGate(msg) {
+            document.getElementById('pinGate').classList.add('open');
+            document.getElementById('pinErr').textContent = msg || '';
+            setTimeout(() => document.getElementById('pinInput').focus(), 50);
+        }
+        function submitPin(ev) {
+            ev.preventDefault();
+            pin = document.getElementById('pinInput').value.trim();
+            try { sessionStorage.setItem('adminPin', pin); } catch (_) {}
+            document.getElementById('pinGate').classList.remove('open');
+            refresh();
+        }
+
+        let toastTimer = null;
+        function showToast(msg, bad) {
+            const t = document.getElementById('toast');
+            t.textContent = msg;
+            t.className = 'toast show' + (bad ? ' bad' : '');
+            clearTimeout(toastTimer);
+            toastTimer = setTimeout(() => { t.className = 'toast'; }, 6000);
+        }
+
+        async function refresh() {
+            clearTimeout(pollTimer);
+            try {
+                const { body } = await api('/state');
+                const prev = state;
+                state = body;
+                resolveSent(prev);
+                render();
+                if (detailFolio) loadDetail(detailFolio, true);
+            } catch (err) {
+                if (err.message !== 'pin' && err.message !== 'forbidden') showToast('No se pudo leer el estado: ' + err.message, true);
+            }
+            const busy = sent.size > 0 || (state && state.inquiries && state.inquiries.length > 0);
+            pollTimer = setTimeout(refresh, busy ? POLL_BUSY_MS : POLL_IDLE_MS);
+        }
+
+        // ¿Ya llegó la respuesta de algo que mandamos desde aquí?
+        function resolveSent() {
+            if (!state) return;
+            for (const [key, info] of sent) {
+                const tx = state.transactions.find((t) => t.folio === key || t.orderId === key);
+                const r = tx && tx.lastReprint;
+                const answered = r && Date.parse(r.at) >= info.at - 1000;
+                const stillOpen = state.inquiries.some((q) => q.folio === key);
+                if (answered) {
+                    sent.delete(key);
+                    showToast(`Respuesta ${tx.folio}: ${r.message || r.reprintModule}`);
+                } else if (Date.now() - info.at > 75000 && !stillOpen) {
+                    sent.delete(key);
+                    showToast(`La terminal no respondió la consulta de ${key}`, true);
+                }
+            }
+        }
+
+        function isWorking(folio, orderId) {
+            if (sent.has(folio) || (orderId && sent.has(orderId))) return true;
+            return !!(state && state.inquiries.some((q) => q.folio === folio));
+        }
+
+        function render() {
+            const busy = state.kiosk.status === 'awaiting_payment';
+            document.getElementById('kioskChip').textContent = 'Kiosco: ' + (KIOSK_LABEL[state.kiosk.status] || state.kiosk.status);
+            document.getElementById('busyBanner').classList.toggle('hidden', !busy);
+            document.getElementById('dayLabel').textContent = new Date(state.day + 'T12:00:00').toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'long' });
+
+            const terminalBusy = busy || state.inquiries.length > 0;
+
+            // Pendientes
+            const pend = document.getElementById('pending');
+            if (!state.pending.length) {
+                pend.innerHTML = '<p class="empty">No hay folios pendientes.</p>';
+            } else {
+                pend.innerHTML = state.pending.map((p) => {
+                    const working = isWorking(p.folio);
+                    const dis = working || terminalBusy ? 'disabled' : '';
+                    return `<div class="card pending">
+                        <div><span class="chip ${p.status === 'PRV' ? 'PRV' : 'SR'}">${esc(PENDING_LABEL[p.status] || p.status)}</span></div>
+                        <div class="folio" style="margin-top:8px;font-family:Consolas,monospace">${esc(p.folio)}</div>
+                        <div class="sub" style="color:var(--muted);font-size:14px">
+                            Origen: ${esc(ORIGIN_LABEL[p.origin] || p.origin || '—')} · desde ${esc(fullTime(p.firstSeenAt))} · ${esc(p.checks || 0)} consulta(s)
+                            ${p.lastError ? '<br>Último intento: ' + esc(p.lastError) : ''}
+                            ${p.status === 'PRV' && p.firstSeenAt && p.firstSeenAt.slice(0, 10) < state.day.slice(0, 10) && new Date(p.firstSeenAt).toLocaleDateString('en-CA', { timeZone: 'America/Mexico_City' }) !== state.day ? '<br><strong>De otro día:</strong> ya no se reconsulta sola; confirmar el estado con NetPay.' : ''}
+                        </div>
+                        ${working ? '<div class="working" style="margin-top:8px">Esperando respuesta de la terminal…</div>' : ''}
+                        <div class="actions">
+                            <button ${dis} onclick="consult('${esc(p.folio)}', false)">Consultar por folio</button>
+                            <button class="secondary" ${dis} onclick="consult('${esc(p.folio)}', true)">Reimprimir ticket</button>
+                            <button class="secondary" onclick="openDetail('${esc(p.folio)}')">Ver detalle</button>
+                            <button class="danger" ${working ? 'disabled' : ''} onclick="discard(this, '${esc(p.folio)}')">Marcar como revisado</button>
+                        </div>
+                    </div>`;
+                }).join('');
+            }
+
+            // Ventas del día
+            const list = document.getElementById('transactions');
+            if (!state.transactions.length) {
+                list.innerHTML = '<p class="empty">Sin ventas registradas hoy.</p>';
+                return;
+            }
+            list.innerHTML = state.transactions.map((t) => {
+                const working = isWorking(t.folio, t.orderId);
+                const dis = working || terminalBusy ? 'disabled' : '';
+                const sale = t.sale ? `${esc(t.sale.responseCode)} ${esc(t.sale.message)}` : (t.sendError ? 'No se pudo enviar' : 'Sin respuesta de la venta');
+                const last = t.lastReprint ? ` · última consulta ${hhmm(t.lastReprint.at)}: ${esc(t.lastReprint.message || t.lastReprint.reprintModule)}` : '';
+                return `<div class="row">
+                    <div class="time">${hhmm(t.at)}</div>
+                    <div class="main">
+                        <div><span class="chip ${esc(t.status.code)}">${esc(t.status.label)}</span> <strong>${money(t.amount)}</strong>${t.cardNumber ? ' · ****' + esc(t.cardNumber) : ''}</div>
+                        <div class="folio">${esc(t.folio)}</div>
+                        <div class="sub">Venta: ${sale}${last}</div>
+                        ${working ? '<div class="working">Esperando respuesta de la terminal…</div>' : ''}
+                    </div>
+                    <div class="actions">
+                        <button ${dis} onclick="consult('${esc(t.folio)}', false)">Consultar</button>
+                        <button class="secondary" ${dis} onclick="consult('${esc(t.folio)}', true)">Reimprimir ticket</button>
+                    </div>
+                    <button class="open" onclick="openDetail('${esc(t.folio)}')">Ver detalle y JSON</button>
+                </div>`;
+            }).join('');
+        }
+
+        async function consult(folio, print) {
+            if (sent.has(folio)) return; // multi-instancia: un toque más no manda otra
+            sent.set(folio, { at: Date.now(), print });
+            render();
+            try {
+                const { body } = await api('/consultar', { method: 'POST', body: JSON.stringify({ folio, print }) });
+                if (!body.ok) {
+                    sent.delete(folio);
+                    showToast(body.message || body.error || 'No se pudo enviar', true);
+                } else {
+                    showToast(print ? `Reimpresión enviada (${folio})` : `Consulta enviada (${folio})`);
+                }
+            } catch (err) {
+                sent.delete(folio);
+                if (err.message !== 'pin') showToast('No se pudo enviar: ' + err.message, true);
+            }
+            refresh();
+        }
+
+        async function consultOrder(orderId, folio, print) {
+            if (sent.has(orderId)) return;
+            sent.set(orderId, { at: Date.now(), print });
+            render();
+            try {
+                const { body } = await api('/reimprimir-orden', { method: 'POST', body: JSON.stringify({ orderId, folio, print }) });
+                if (!body.ok) { sent.delete(orderId); showToast(body.message || 'No se pudo enviar', true); }
+                else showToast(`Reimpresión por orderId enviada (${orderId})`);
+            } catch (err) {
+                sent.delete(orderId);
+                if (err.message !== 'pin') showToast('No se pudo enviar: ' + err.message, true);
+            }
+            refresh();
+        }
+
+        // Dos toques para descartar (sin diálogos del navegador en el kiosco).
+        async function discard(btn, folio) {
+            if (btn.dataset.armed !== '1') {
+                btn.dataset.armed = '1';
+                btn.textContent = 'Toca otra vez para confirmar';
+                setTimeout(() => { if (btn.isConnected) { btn.dataset.armed = ''; btn.textContent = 'Marcar como revisado'; } }, 4000);
+                return;
+            }
+            try {
+                const { body } = await api('/pendientes/' + encodeURIComponent(folio) + '/descartar', { method: 'POST' });
+                showToast(body.ok ? `${folio} quitado de pendientes` : body.message, !body.ok);
+            } catch (_) {}
+            refresh();
+        }
+
+        // ------- Detalle -------
+        function openDetail(folio) {
+            detailFolio = folio;
+            document.getElementById('sheet').innerHTML = '<p class="empty">Cargando…</p>';
+            document.getElementById('sheet').classList.add('open');
+            document.getElementById('sheetBg').classList.add('open');
+            loadDetail(folio, false);
+        }
+        function closeDetail() {
+            detailFolio = null;
+            document.getElementById('sheet').classList.remove('open');
+            document.getElementById('sheetBg').classList.remove('open');
+        }
+
+        const KIND_LABEL = {
+            sale: 'Respuesta de venta', cancel: 'Respuesta de cancelación', reprint: 'Respuesta de reimpresión',
+            reprint_not_found: 'Respuesta de reimpresión (sin registro)', request: 'Petición enviada',
+        };
+
+        let lastDetailKey = '';
+        async function loadDetail(folio, silent) {
+            let data;
+            try { ({ body: data } = await api('/folio/' + encodeURIComponent(folio))); } catch (_) { return; }
+            if (detailFolio !== folio) return;
+            const key = JSON.stringify(data.events.map((e) => e.at));
+            if (silent && key === lastDetailKey) return; // sin cambios: no re-pintar (no cerrar los JSON abiertos)
+            lastDetailKey = key;
+
+            const tx = state && state.transactions.find((t) => t.folio === folio);
+            const sale = data.events.filter((e) => e.kind === 'sale').pop();
+            const reprint = data.events.filter((e) => e.kind === 'reprint' || e.kind === 'reprint_not_found').pop();
+            const orderId = (sale && sale.orderId) || data.orderIds[0] || '';
+            const working = isWorking(folio, orderId);
+            const terminalBusy = state && (state.kiosk.status === 'awaiting_payment' || state.inquiries.length > 0);
+            const dis = working || terminalBusy ? 'disabled' : '';
+
+            // Voucher personalizado que pide NetPay para reversos: código y
+            // mensaje de la venta original + mensaje de la reimpresión.
+            const voucher = sale || reprint ? `<div class="voucher">
+                    <div>Folio: ${esc(folio)}</div>
+                    ${sale ? `<div>Venta original: ${esc(sale.responseCode)} — ${esc(sale.message)}</div>` : '<div>Venta original: sin respuesta de la terminal</div>'}
+                    ${reprint ? `<div>Consulta por folio: ${esc(reprint.reprintModule || '')} ${esc(reprint.message)}</div>` : '<div>Consulta por folio: aún no se consulta</div>'}
+                    ${reprint && reprint.reprintModule === 'RV' ? '<div>No se realizó ningún cargo a la tarjeta.</div>' : ''}
+                    ${reprint && reprint.reprintModule === 'PRV' ? '<div>Se reversa con la siguiente venta aprobada del día.</div>' : ''}
+                    ${reprint && reprint.kind === 'reprint_not_found' ? '<div>No se realizó ningún cobro.</div>' : ''}
+                </div>` : '';
+
+            const events = data.events.map((e, i) => {
+                const json = e.raw || e.bodyText || e;
+                const text = typeof json === 'string' ? json : JSON.stringify(json, null, 2);
+                const label = KIND_LABEL[e.kind] || e.kind;
+                const what = e.kind === 'request'
+                    ? `${esc(e.op)}${e.print === true ? ' (con ticket)' : ''} → ${esc(e.ok === false ? (e.message || e.error) : (e.message || 'enviada'))}`
+                    : `${esc(e.responseCode || '')} ${esc(e.reprintModule ? e.reprintModule + ' · ' : '')}${esc(e.message || '')}`;
+                return `<details class="event">
+                    <summary><strong>${hhmm(e.at)}</strong> ${esc(label)} <span class="sub">${what}</span></summary>
+                    <pre id="json-${i}">${esc(text)}</pre>
+                    ${e.raw ? `<button class="secondary copy" onclick="copyJson(${i})">Copiar JSON</button>` : ''}
+                </details>`;
+            }).join('');
+
+            document.getElementById('sheet').innerHTML = `
+                <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start">
+                    <div>
+                        <h3>${esc(folio)}</h3>
+                        <div class="sub" style="color:var(--muted)">${tx ? `${esc(tx.status.label)} · ${money(tx.amount)}` : ''}${orderId ? ' · orderId ' + esc(orderId) : ''}</div>
+                    </div>
+                    <button class="secondary" onclick="closeDetail()">Cerrar</button>
+                </div>
+                ${voucher}
+                ${working ? '<p class="working">Esperando respuesta de la terminal…</p>' : ''}
+                <div class="actions" style="display:flex;flex-wrap:wrap;gap:8px;margin:6px 0 18px">
+                    <button ${dis} onclick="consult('${esc(folio)}', false)">Consultar por folio</button>
+                    <button class="secondary" ${dis} onclick="consult('${esc(folio)}', true)">Reimprimir ticket (folio)</button>
+                    ${orderId ? `<button class="secondary" ${dis} onclick="consultOrder('${esc(orderId)}', '${esc(folio)}', true)">Reimprimir ticket (orderId)</button>` : ''}
+                </div>
+                <h2 style="margin-top:0">Bitácora del folio</h2>
+                ${events || '<p class="empty">Sin registros.</p>'}`;
+        }
+
+        function copyJson(i) {
+            const text = document.getElementById('json-' + i).textContent;
+            const done = () => showToast('JSON copiado');
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(text).then(done, () => fallbackCopy(text, done));
+            } else fallbackCopy(text, done);
+        }
+        function fallbackCopy(text, done) {
+            const ta = document.createElement('textarea');
+            ta.value = text; document.body.appendChild(ta); ta.select();
+            try { document.execCommand('copy'); done(); } catch (_) { showToast('No se pudo copiar', true); }
+            ta.remove();
+        }
+
+        refresh();
+    </script>
+</body>
+</html>

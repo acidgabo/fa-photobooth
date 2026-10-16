@@ -101,6 +101,24 @@ function lenientNetpayBody(req, res, next) {
     // sin reparación posible
   }
 
+  // Segunda reparación: quitar el objeto "traceability". Es el único campo
+  // que armamos nosotros con texto libre y la terminal lo regresa mal
+  // serializado cuando trae comillas, "=" o acentos (cancelación del
+  // 15-oct-2026: "motivo":"...(orderIdu003d"cabina-1_"}). Sin él se
+  // recuperan todos los campos de la terminal (responseCode, orderId,
+  // folioNumber, transType...) y la cancelación se puede confirmar.
+  const withoutTraceability = text.replace(/"traceability"\s*:\s*\{[^{}]*\}/, '"traceability":null');
+  if (withoutTraceability !== text) {
+    try {
+      req.body = JSON.parse(escapeControlCharsInStrings(withoutTraceability));
+      console.warn('[webhook] body reparado quitando el traceability mal formado — se procesa normal');
+      netpayLog.append({ kind: 'invalid_json_repaired', length: text.length, removed: 'traceability' });
+      return next();
+    } catch (_) {
+      // sigue sin poderse leer
+    }
+  }
+
   console.error(
     '[webhook] no se pudo reparar el body — se responde Recibido para que la terminal no reintente; ' +
       'el texto crudo quedó en logs/netpay-transacciones.log (kind "invalid_json")'

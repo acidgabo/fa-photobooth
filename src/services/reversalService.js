@@ -53,6 +53,16 @@ const recheckDelayMs = () => ms('REVERSAL_RECHECK_DELAY_MS', 30000);
 // Separación entre reconsultas, para no encimar pushes a la terminal.
 const recheckSpacingMs = () => ms('REVERSAL_RECHECK_SPACING_MS', 5000);
 
+// Texto que va en traceability.motivo de cada consulta automática — la
+// terminal lo regresa en la respuesta, y así se ve en la evidencia por qué
+// se hizo cada reimpresión y de qué venta.
+const MOTIVOS = {
+  declined: 'consulta automatica venta declinada',
+  payment_timeout: 'consulta automatica venta sin respuesta',
+  recheck: 'reconsulta automatica PRV',
+  manual: 'operador panel',
+};
+
 // folio -> { reason, detail, timer, done } — consultas enviadas esperando
 // webhook. `done` resuelve la promesa que regresa checkFolio() cuando la
 // consulta termina (respuesta, "no encontrada", timeout o falla al enviar).
@@ -135,7 +145,7 @@ function getPending() {
  * para no tener dos consultas abiertas a la vez, que es lo que permite
  * atribuir una respuesta "No se encontraron datos" (que llega SIN folio).
  */
-function checkFolio(folio, reason, detail = '') {
+function checkFolio(folio, reason, detail = '', { print = false } = {}) {
   if (!folio) return Promise.resolve();
 
   finishInquiry(folio); // una consulta anterior del mismo folio, si la hubiera
@@ -148,19 +158,72 @@ function checkFolio(folio, reason, detail = '') {
   if (typeof timer.unref === 'function') timer.unref();
   inquiries.set(folio, { reason, detail, timer, done });
 
-  netpayService
-    .reprintByFolio({ folioId: folio })
+  // `sent` se resuelve con { ok, error } cuando el push sale (o falla) —
+  // lo usa el panel del operador para avisar de inmediato si no se pudo
+  // enviar. Los llamados automáticos lo ignoran.
+  finished.sent = netpayService
+    .reprintByFolio({ folioId: folio, print, motivo: MOTIVOS[reason] || reason })
     .then(() => {
-      console.log(`[reversalService] consulta de estado enviada — folio=${folio} (motivo: ${reason})`);
+      console.log(`[reversalService] consulta de estado enviada — folio=${folio} (motivo: ${reason}${print ? ', con ticket' : ''})`);
+      return { ok: true };
     })
     .catch((err) => {
       console.error(`[reversalService] no se pudo enviar la consulta — folio=${folio} (motivo: ${reason}): ${err.message}`);
       if (finishInquiry(folio)) {
         markUnknown(folio, reason, detail, `no se pudo enviar la consulta: ${err.message}`);
       }
+      return { ok: false, error: err.message };
     });
 
   return finished;
+}
+
+/**
+ * Consulta/reimpresión por folio pedida por el operador desde el panel de
+ * reimpresiones (pendiente 1 de NetPay, 15-oct-2026). Misma ruta que las
+ * consultas automáticas — así la respuesta se procesa igual (un PRV que pasa
+ * a RV se cierra, un "No se encontraron datos" se atribuye a este folio) —
+ * pero con candados para no encimar peticiones a la terminal:
+ *  - no si ya hay una consulta de ese folio esperando respuesta
+ *    (multi-instancias: el operador toca el botón varias veces);
+ *  - no si hay CUALQUIER otra consulta abierta (la respuesta "No se
+ *    encontraron datos" llega sin folio y solo se puede atribuir si hay una
+ *    sola abierta).
+ * Regresa { ok, error?, message? } en cuanto el push sale.
+ */
+async function manualCheck(folio, { print = false } = {}) {
+  if (!folio) return { ok: false, error: 'missing_folio', message: 'Falta el folio' };
+  if (inquiries.has(folio)) {
+    return {
+      ok: false,
+      error: 'reprint_in_progress',
+      message: `Ya hay una consulta del folio ${folio} esperando respuesta de la terminal`,
+    };
+  }
+  if (inquiries.size > 0) {
+    return {
+      ok: false,
+      error: 'terminal_busy',
+      message: `La terminal está respondiendo otra consulta (${[...inquiries.keys()].join(', ')}). Intenta en unos segundos`,
+    };
+  }
+  const finished = checkFolio(folio, 'manual', '', { print });
+  return finished.sent;
+}
+
+function openInquiries() {
+  return [...inquiries.entries()].map(([folio, inquiry]) => ({ folio, reason: inquiry.reason }));
+}
+
+/**
+ * El operador da por resuelto un pendiente (p.ej. uno de otro día que ya se
+ * revisó a mano con NetPay). Solo lo quita de la lista; no manda nada a la
+ * terminal.
+ */
+function discardPending(folio) {
+  const entry = removePending(folio);
+  if (entry) console.log(`[reversalService] pendiente descartado por el operador — folio=${folio} (estado: ${entry.status})`);
+  return entry;
 }
 
 function onInquiryTimeout(folio) {
@@ -169,6 +232,9 @@ function onInquiryTimeout(folio) {
   console.warn(
     `[reversalService] la terminal no respondió a la consulta en ${inquiryTimeoutMs()}ms — folio=${folio} (motivo: ${inquiry.reason})`
   );
+  // Una consulta manual de una venta que no estaba pendiente no la vuelve
+  // pendiente: el operador ve en el panel que no hubo respuesta.
+  if (inquiry.reason === 'manual' && !loadPending()[folio]) return;
   markUnknown(folio, inquiry.reason, inquiry.detail, 'la terminal no respondió a la consulta');
 }
 
@@ -178,7 +244,8 @@ function onInquiryTimeout(folio) {
 // consultar se avisa igual, porque el reverso es justo lo que no pudimos
 // confirmar.
 function markUnknown(folio, reason, detail, why) {
-  const origin = reason === 'recheck' ? undefined : reason;
+  if (reason === 'manual' && !loadPending()[folio]) return;
+  const origin = reason === 'recheck' || reason === 'manual' ? undefined : reason;
   const { isNew, entry } = upsertPending(folio, {
     status: statusKeepingPrv(folio, 'sin_respuesta'),
     ...(origin ? { origin } : {}),
@@ -256,7 +323,9 @@ function handleReprintResponse(body) {
 
   if (inquiry) finishInquiry(folio);
 
-  if (!inquiry && !pendingEntry) return module; // reimpresión manual, nada que hacer
+  // Reimpresión manual (script de prueba, o el panel) de una venta que no
+  // estaba pendiente: solo se registra, no hay nada que resolver.
+  if (!pendingEntry && (!inquiry || inquiry.reason === 'manual')) return module;
 
   if (pendingEntry) {
     const pending = loadPending();
@@ -266,7 +335,8 @@ function handleReprintResponse(body) {
     }
   }
 
-  const origin = (pendingEntry && pendingEntry.origin) || (inquiry && inquiry.reason);
+  const origin =
+    (pendingEntry && pendingEntry.origin) || (inquiry && inquiry.reason !== 'manual' ? inquiry.reason : undefined);
   const detail = (inquiry && inquiry.detail) || (pendingEntry && pendingEntry.detail) || '';
   const who = `folio="${folio}" monto=$${body.amount || '?'} tarjeta=****${body.cardNumber || '?'} motivo="${origin}"${detail ? ` detalle="${detail}"` : ''}`;
 
@@ -385,8 +455,17 @@ let recheckTimer = null;
  * que quedaron "sin_respuesta"). Se espera un margen y se consultan uno
  * por uno.
  */
+function cdmxDay(date) {
+  return date.toLocaleDateString('en-CA', { timeZone: 'America/Mexico_City' });
+}
+
+function autoRecheckEnabled() {
+  return String(process.env.REVERSAL_AUTO_RECHECK || 'true').toLowerCase() !== 'false';
+}
+
 function scheduleRecheck() {
-  if (getPending().length === 0) return;
+  if (!autoRecheckEnabled()) return;
+  if (!getPending().some((entry) => entry.status === 'PRV')) return;
   if (recheckTimer) clearTimeout(recheckTimer);
   recheckTimer = setTimeout(runRecheck, recheckDelayMs());
   if (typeof recheckTimer.unref === 'function') recheckTimer.unref();
@@ -396,7 +475,18 @@ async function runRecheck() {
   recheckTimer = null;
   // Lazy require: sessionState.js también requiere este módulo.
   const sessionState = require('../sessionState');
-  const folios = getPending().map((entry) => entry.folio);
+  // Solo se reconsultan los PRV de HOY: la siguiente venta exitosa es la que
+  // los convierte en RV, y un PRV solo se resuelve el mismo día. Los que
+  // quedaron "sin_respuesta" (la terminal no contestó) o son de otro día NO
+  // se reconsultan solos — quedan en el panel de reimpresiones para que el
+  // operador los consulte a mano. Antes se reconsultaba TODO lo pendiente
+  // tras cada venta exitosa, y en la certificación del 15-oct eso se vio como
+  // reimpresiones "de más" y de folios que no tenían que ver con la prueba
+  // (pendientes 3 y 4 de NetPay).
+  const today = cdmxDay(new Date());
+  const folios = getPending()
+    .filter((entry) => entry.status === 'PRV' && cdmxDay(new Date(entry.firstSeenAt)) === today)
+    .map((entry) => entry.folio);
 
   for (let i = 0; i < folios.length; i++) {
     // No mandar pushes a la terminal si otro cliente está pagando en ese
@@ -408,6 +498,7 @@ async function runRecheck() {
     if (i > 0) await new Promise((resolve) => setTimeout(resolve, recheckSpacingMs()));
     // Se espera a que la consulta TERMINE antes de mandar la siguiente —
     // una sola consulta abierta a la vez (ver handleNotFound).
+    if (inquiries.has(folios[i])) continue; // ya hay una consulta de ese folio en curso
     await checkFolio(folios[i], 'recheck');
   }
 }
@@ -418,6 +509,9 @@ module.exports = {
   handleNotFound,
   scheduleRecheck,
   getPending,
+  manualCheck,
+  openInquiries,
+  discardPending,
   // solo tests
   _runRecheck: runRecheck,
   _inquiries: inquiries,
