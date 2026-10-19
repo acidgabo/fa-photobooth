@@ -5,8 +5,9 @@ const reversalService = require('./services/reversalService');
 // Ninguno de estos dos depende de sessionState.js (a diferencia de
 // hardwareWatch.js, que sí lo requiere) — por eso se puede llamar directo
 // desde aquí sin crear una dependencia circular.
-const hardwareMonitorService = require('./services/hardwareMonitorService');
-const windowsPrinterService = require('./services/windowsPrinterService');
+// Chequeos de cámara/impresora: reales (WMI) en la cabina o simulados en la
+// laptop, según HARDWARE_MODE — ver services/hardware.js.
+const hardware = require('./services/hardware');
 
 // Mismo set que WINDOWS_CAPABLE_MODES en hardwareWatch.js — los chequeos de
 // cámara/impresora son vía WMI/PowerShell, no existen en BOOTH_MODE=direct
@@ -239,7 +240,7 @@ async function handleSessionEndWithoutPrinting({ orderId, package: pkg, terminal
 
   if (hardwareChecksAvailable()) {
     try {
-      const cameraCheck = await hardwareMonitorService.checkCameraPresence();
+      const cameraCheck = await hardware.checkCameraPresence();
       if (!cameraCheck.ok) {
         console.warn(
           `[sessionState] session_end sin "printing" Y cámara confirmada ausente — cancelando automáticamente (${detail})`
@@ -273,7 +274,7 @@ async function handlePostPrintCheck({ orderId, package: pkg, terminalOrderId }) 
   const detail = `orderId="${orderId || '?'}" package="${pkg || '?'}"`;
 
   try {
-    const result = await hardwareMonitorService.checkPrintFailure();
+    const result = await hardware.checkPrintFailure();
     if (!result.failed) return; // todo bien — no hacer ni avisar nada
 
     console.warn(
@@ -287,7 +288,7 @@ async function handlePostPrintCheck({ orderId, package: pkg, terminalOrderId }) 
       { folioNumber: orderId }
     );
 
-    const cleared = await windowsPrinterService.clearPrintQueue();
+    const cleared = await hardware.clearPrintQueue();
     console.log(`[sessionState] cola de impresión limpiada tras falla confirmada — ${cleared.cleared} trabajo(s) removido(s)`);
   } catch (err) {
     console.error('[sessionState] handlePostPrintCheck falló inesperadamente:', err.message);

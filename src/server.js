@@ -8,6 +8,7 @@ const webhookRoutes = require('./routes/webhook');
 const dslrboothRoutes = require('./routes/dslrbooth');
 const sessionRoutes = require('./routes/session');
 const diagnosticsRoutes = require('./routes/diagnostics');
+const devMockRoutes = require('./routes/devMock');
 const hardwareWatch = require('./hardwareWatch');
 
 const app = express();
@@ -21,6 +22,7 @@ app.use('/api/session', sessionRoutes);
 app.use('/webhooks', webhookRoutes);
 app.use('/dslrbooth', dslrboothRoutes); // recibe los Triggers de dslrBooth
 app.use('/diagnostics', diagnosticsRoutes); // solo relevante en BOOTH_MODE=direct
+app.use('/api/dev', devMockRoutes); // escenarios de prueba — solo con HARDWARE_MODE=mock
 
 // Pantalla táctil: un solo archivo estático, sin build. Editar directo en
 // public/index.html (o public/config.js para colores/textos).

@@ -22,7 +22,14 @@ router.get('/packages', (req, res) => {
 // que causaba los cobros huérfanos documentados en
 // Bitacora_Pruebas_Netpay_dslrBooth.md.
 router.get('/config', (req, res) => {
-  res.json({ paymentMock: config.netpay.isMock, certCustomAmount: config.netpay.certCustomAmount });
+  res.json({
+    paymentMock: config.netpay.isMock,
+    certCustomAmount: config.netpay.certCustomAmount,
+    // Panel de escenarios de prueba en el kiosco (public/dev-escenarios.js):
+    // solo con hardware simulado (laptop de desarrollo). En la cabina
+    // (HARDWARE_MODE=windows) es false y el panel ni se carga.
+    devScenarios: config.hardwareMonitor.mode === 'mock',
+  });
 });
 
 // Estados en los que ya hay una venta o una sesión de fotos en curso — un

@@ -19,7 +19,7 @@
  */
 const config = require('./config');
 const sessionState = require('./sessionState');
-const hardwareMonitorService = require('./services/hardwareMonitorService');
+const hardware = require('./services/hardware'); // real (WMI) o simulado, según HARDWARE_MODE
 const notifyService = require('./services/notifyService');
 const windowFocusService = require('./services/windowFocusService');
 
@@ -71,7 +71,7 @@ async function checkNow() {
   if (!config.hardwareMonitor.enabled || !WINDOWS_CAPABLE_MODES.has(config.booth.mode)) {
     return current; // sin cambios: se queda en { ok: true, ... } por default
   }
-  const result = await hardwareMonitorService.checkAll();
+  const result = await hardware.checkAll();
   return applyResult(result);
 }
 
@@ -105,6 +105,15 @@ function start() {
     return;
   }
   if (loopTimer) return; // ya iniciado
+
+  if (config.hardwareMonitor.mode === 'mock') {
+    console.log(
+      `[hardwareWatch] monitoreo activo con HARDWARE SIMULADO (HARDWARE_MODE=mock, ${config.hardwareMonitor.mockUrl}), ` +
+        `revisando cada ${config.hardwareMonitor.idlePollIntervalMs / 1000}s mientras la cabina esté libre`
+    );
+    tick();
+    return;
+  }
 
   console.log(
     `[hardwareWatch] monitoreo activo (cámara VID_${config.camera.vid}&PID_${config.camera.pid}, ` +

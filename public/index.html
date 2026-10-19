@@ -492,10 +492,12 @@
         // pruebas del proyecto). Si esta llamada falla, se queda en false
         // por seguridad — sin confirmar modo mock, mejor no correr el timer.
         async function loadPaymentConfig() {
+            let devScenarios = false;
             try {
                 const cfg = await api('/api/config');
                 paymentMock = !!cfg.paymentMock;
                 certCustomAmount = !!cfg.certCustomAmount;
+                devScenarios = !!cfg.devScenarios;
             } catch (err) {
                 paymentMock = false;
                 certCustomAmount = false;
@@ -506,6 +508,16 @@
             // webhook real (ver bitácora de pruebas del proyecto).
             const simButtons = document.getElementById('simButtons');
             if (simButtons) simButtons.style.display = paymentMock ? '' : 'none';
+
+            // Panel de escenarios de prueba (fallas de LumaBooth, cámara e
+            // impresora): solo se carga con HARDWARE_MODE=mock, en la laptop
+            // de desarrollo. En la cabina el script ni se descarga.
+            if (devScenarios && window.__devScenariosLoaded !== true) {
+                window.__devScenariosLoaded = true;
+                const s = document.createElement('script');
+                s.src = 'dev-escenarios.js';
+                document.body.appendChild(s);
+            }
         }
 
         // --- Pantalla 2: catálogo desde el backend --------------------

@@ -150,6 +150,15 @@ module.exports = {
     // hardwareWatch.checkNow() siempre regresa { ok: true }, igual que en
     // BOOTH_MODE=direct. Default: activado.
     enabled: (process.env.HARDWARE_MONITOR_ENABLED || 'true') === 'true',
+    // De dónde salen los chequeos de cámara/impresora (ver src/services/hardware.js):
+    //  - 'windows' (default): WMI/PowerShell contra el hardware real — la cabina.
+    //  - 'mock': se le pregunta al mock de LumaBooth (mocks/mock-dslrbooth.js),
+    //    que simula cámara e impresora según el escenario elegido. Para
+    //    trabajar en una laptop (Linux incluido) sin cámara, impresora ni
+    //    LumaBooth, y aun así poder provocar las cancelaciones automáticas.
+    mode: (process.env.HARDWARE_MODE || 'windows').toLowerCase(),
+    // Solo con HARDWARE_MODE=mock. Default: el mismo mock de LumaBooth.
+    mockUrl: process.env.MOCK_HARDWARE_URL || `${process.env.DSLRBOOTH_BASE_URL || 'http://localhost:1500'}/mock/hardware`,
     // Cadencia normal: solo se revisa mientras la sesión está en "idle" (no
     // tiene caso interrumpir una sesión de fotos ya pagada/en curso a media
     // captura). Antes de aceptar un pago (POST /api/pay) SIEMPRE se hace
