@@ -39,16 +39,6 @@ let state = {
   lastEvent: null,
   updatedAt: new Date().toISOString(),
   error: null,
-  // Venta declinada: responseCode y mensaje ORIGINALES de la terminal (p.ej.
-  // "05" / "Error al leer tarjeta"). Junto con "reversal" arman el voucher
-  // personalizado que pide NetPay para los casos de reverso.
-  declinedCode: null,
-  declinedMessage: null,
-  // Resultado de la consulta del folio cuando la venta declinada (o sin
-  // respuesta) resultó ser un reverso — lo escribe reversalService.js:
-  // { type: 'RV'|'PRV'|'NF' (NF = la terminal no tiene registro: sin cobro), message, folio, amount, card, at }. El frontend lo
-  // muestra en la pantalla de error. null = sin información de reverso.
-  reversal: null,
   // Grupo 4 de la taxonomía de fallas: ¿vimos el Trigger "printing" en
   // ALGÚN momento de la sesión actual? Se usa solo como señal en
   // recordBoothEvent() al llegar "session_end" — ver el comentario ahí.
@@ -158,9 +148,6 @@ function reset() {
     lastEvent: null,
     updatedAt: new Date().toISOString(),
     error: null,
-    declinedCode: null,
-    declinedMessage: null,
-    reversal: null,
     sawPrintingEvent: false,
     sessionEndHandled: false,
   };

@@ -229,13 +229,7 @@ router.post('/netpay', async (req, res) => {
 
   if (responseCode !== '00') {
     console.log(`[webhook] pago rechazado (folioNumber: ${folioNumber}, responseCode: ${responseCode}, message: ${netpayMessage})`);
-    sessionState.set({
-      status: 'error',
-      error: netpayMessage || `responseCode ${responseCode}`,
-      declinedCode: responseCode,
-      declinedMessage: netpayMessage || null,
-      reversal: null,
-    });
+    sessionState.set({ status: 'error', error: netpayMessage || `responseCode ${responseCode}` });
     // Una venta declinada puede esconder un reverso: el banco autorizó y
     // la comunicación se cortó (p.ej. "05 Error al leer tarjeta" → la
     // reimpresión confirmó "RV", 24-sep-2026). Se consulta el folio para

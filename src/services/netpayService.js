@@ -33,27 +33,11 @@ function tokenLifetimeMs(expiresInSeconds) {
  */
 const TRACEABILITY_MAX_LEN = 60;
 
-// La terminal vuelve a serializar el traceability al armar el webhook y se
-// atraganta con ciertos caracteres: el 15-oct-2026 un motivo con comillas,
-// "=" y acentos ("...cámara ausente (orderId=\"cabina-1_...") regresó como
-// JSON inválido (orderIdu003d"cabina-1_") y se perdió la confirmación de la
-// cancelación. Por eso los valores van solo en ASCII simple: sin acentos,
-// comillas, "=", barras ni paréntesis, y se recortan DESPUÉS de limpiar.
-function sanitizeTraceabilityValue(value) {
-  return String(value)
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^A-Za-z0-9 _.,:-]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, TRACEABILITY_MAX_LEN);
-}
-
 function buildTraceability(fields = {}) {
   const traceability = { cabina: config.netpay.boothId };
   for (const [key, value] of Object.entries(fields)) {
     if (value === undefined || value === null || value === '') continue;
-    traceability[key] = sanitizeTraceabilityValue(value);
+    traceability[key] = String(value).slice(0, TRACEABILITY_MAX_LEN);
   }
   return traceability;
 }
@@ -390,13 +374,13 @@ async function cancelSale({ orderId, folioNumber, reason }) {
  *   cuando de verdad se necesita el papel (p.ej. pruebas de certificación).
  * - La respuesta llega por el webhook con isRePrint:true (routes/webhook.js).
  */
-async function reprintByOrderId({ orderId, print = false, folioNumber, motivo }) {
+async function reprintByOrderId({ orderId, print = false, folioNumber }) {
   if (!orderId) throw new Error('reprintByOrderId: falta orderId (terminalOrderId)');
   return pushToTerminal('reprint', '/integration-service/transactions/reprint', {
     serialNumber: config.netpay.serialNumber,
     storeId: config.netpay.storeId,
     orderId,
-    traceability: buildTraceability({ operacion: 'reimpresion', folio: folioNumber, motivo }),
+    traceability: buildTraceability({ operacion: 'reimpresion', folio: folioNumber }),
     disablePrintAnimation: !print,
   });
 }
@@ -415,19 +399,14 @@ async function reprintByOrderId({ orderId, print = false, folioNumber, motivo })
  *   reprintModule indica el estado ("D" declinada, "RV" reversada, "PRV"
  *   pendiente por reversar — ver Flujo Manejo de Reversos.pdf).
  */
-// `motivo` viaja en el traceability y la terminal lo regresa en la
-// respuesta: así cada reimpresión dice de qué folio es y QUIÉN la pidió
-// (consulta automática tras una declinada, tras un timeout, reconsulta de
-// un PRV, o el operador desde el panel). Pendiente 4 de NetPay (15-oct):
-// "validar si se está reimprimiendo el folio correcto".
-async function reprintByFolio({ folioId, print = false, motivo }) {
+async function reprintByFolio({ folioId, print = false }) {
   if (!folioId) throw new Error('reprintByFolio: falta folioId');
   return pushToTerminal('reprint', '/integration-service/transactions/reprint', {
     serialNumber: config.netpay.serialNumber,
     storeId: config.netpay.storeId,
     orderId: '',
     folioId,
-    traceability: buildTraceability({ operacion: 'reimpresion', folio: folioId, motivo }),
+    traceability: buildTraceability({ operacion: 'reimpresion', folio: folioId }),
     disablePrintAnimation: !print,
   });
 }
