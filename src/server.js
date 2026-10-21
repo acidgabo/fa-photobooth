@@ -9,6 +9,7 @@ const dslrboothRoutes = require('./routes/dslrbooth');
 const sessionRoutes = require('./routes/session');
 const diagnosticsRoutes = require('./routes/diagnostics');
 const devMockRoutes = require('./routes/devMock');
+const adminRoutes = require('./routes/admin');
 const hardwareWatch = require('./hardwareWatch');
 
 const app = express();
@@ -23,6 +24,11 @@ app.use('/webhooks', webhookRoutes);
 app.use('/dslrbooth', dslrboothRoutes); // recibe los Triggers de dslrBooth
 app.use('/diagnostics', diagnosticsRoutes); // solo relevante en BOOTH_MODE=direct
 app.use('/api/dev', devMockRoutes); // escenarios de prueba — solo con HARDWARE_MODE=mock
+// Panel remoto de reimpresiones y reversos. La página en sí no tiene datos
+// (se sirve sin token); todo lo que trae datos o manda algo a la terminal
+// vive en /admin/api/* y pasa por middleware/adminAuth.js.
+app.get(['/admin', '/admin/'], (req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'admin.html')));
+app.use('/admin', adminRoutes);
 
 // Pantalla táctil: un solo archivo estático, sin build. Editar directo en
 // public/index.html (o public/config.js para colores/textos).
@@ -39,6 +45,10 @@ app.listen(config.port, () => {
   console.log('  GET  /dslrbooth/events       <- dslrBooth manda triggers de sesión');
   console.log('  GET  /diagnostics/camera     <- (modo direct/windirect) confirma que la cámara está detectada');
   console.log('  GET  /diagnostics/printer    <- (modo direct/windirect) lista impresoras disponibles');
+  console.log(
+    `Panel de reimpresiones: http://localhost:${config.port}/admin ` +
+      (process.env.ADMIN_TOKEN ? '(token configurado)' : '(APAGADO: falta ADMIN_TOKEN en .env)')
+  );
 
   // Monitoreo de hardware (cámara + impresora) — ver src/hardwareWatch.js.
   // No bloquea el arranque: si BOOTH_MODE no lo soporta, se desactiva solo.

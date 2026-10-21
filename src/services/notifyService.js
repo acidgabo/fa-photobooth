@@ -95,14 +95,20 @@ function notifyReversalConfirmed(detail) {
 // Venta "pendiente por reversar" (PRV): el cobro sigue autorizado hasta
 // que la terminal complete otra venta exitosa. Se reconsulta sola; si no
 // se resuelve, requiere seguimiento con NetPay.
+// Link al panel remoto de reimpresiones (ADMIN_PANEL_URL en el .env, p. ej.
+// https://admin.caretechixta.com/admin) para los avisos que piden acción.
+function panelLink() {
+  return process.env.ADMIN_PANEL_URL ? `\nPanel: ${process.env.ADMIN_PANEL_URL}` : '';
+}
+
 function notifyReversalPending(detail) {
-  return notifyDiscord(`🟠 Venta pendiente por reversar — revisar si no se resuelve\nDetalles: ${detail}`);
+  return notifyDiscord(`🟠 Venta pendiente por reversar — revisar si no se resuelve\nDetalles: ${detail}${panelLink()}`);
 }
 
 // No se pudo saber cómo quedó una venta (la terminal no respondió a la
 // consulta). Puede haber un cobro sin servicio — se reintenta solo.
 function notifyReversalUnknown(detail) {
-  return notifyDiscord(`🟠 No se pudo confirmar el estado de una venta — posible cobro sin servicio\nDetalles: ${detail}`);
+  return notifyDiscord(`🟠 No se pudo confirmar el estado de una venta — posible cobro sin servicio\nDetalles: ${detail}${panelLink()}`);
 }
 
 // Un folio que habíamos marcado como pendiente resultó no existir en la
@@ -113,7 +119,7 @@ function notifyReversalNotFound(detail) {
 
 // La consulta regresó algo que no cuadra con lo que sabíamos de la venta.
 function notifyReversalMismatch(detail) {
-  return notifyDiscord(`🔴 Estado de venta inesperado — revisar a mano\nDetalles: ${detail}`);
+  return notifyDiscord(`🔴 Estado de venta inesperado — revisar a mano\nDetalles: ${detail}${panelLink()}`);
 }
 
 module.exports = {

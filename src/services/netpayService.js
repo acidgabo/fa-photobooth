@@ -374,13 +374,16 @@ async function cancelSale({ orderId, folioNumber, reason }) {
  *   cuando de verdad se necesita el papel (p.ej. pruebas de certificación).
  * - La respuesta llega por el webhook con isRePrint:true (routes/webhook.js).
  */
-async function reprintByOrderId({ orderId, print = false, folioNumber }) {
+// `motivo` (opcional) viaja en el traceability y la terminal lo regresa en
+// la respuesta: así se distingue una reimpresión pedida desde el panel del
+// operador de las consultas automáticas. Solo texto ASCII simple.
+async function reprintByOrderId({ orderId, print = false, folioNumber, motivo }) {
   if (!orderId) throw new Error('reprintByOrderId: falta orderId (terminalOrderId)');
   return pushToTerminal('reprint', '/integration-service/transactions/reprint', {
     serialNumber: config.netpay.serialNumber,
     storeId: config.netpay.storeId,
     orderId,
-    traceability: buildTraceability({ operacion: 'reimpresion', folio: folioNumber }),
+    traceability: buildTraceability({ operacion: 'reimpresion', folio: folioNumber, motivo }),
     disablePrintAnimation: !print,
   });
 }
@@ -399,14 +402,14 @@ async function reprintByOrderId({ orderId, print = false, folioNumber }) {
  *   reprintModule indica el estado ("D" declinada, "RV" reversada, "PRV"
  *   pendiente por reversar — ver Flujo Manejo de Reversos.pdf).
  */
-async function reprintByFolio({ folioId, print = false }) {
+async function reprintByFolio({ folioId, print = false, motivo }) {
   if (!folioId) throw new Error('reprintByFolio: falta folioId');
   return pushToTerminal('reprint', '/integration-service/transactions/reprint', {
     serialNumber: config.netpay.serialNumber,
     storeId: config.netpay.storeId,
     orderId: '',
     folioId,
-    traceability: buildTraceability({ operacion: 'reimpresion', folio: folioId }),
+    traceability: buildTraceability({ operacion: 'reimpresion', folio: folioId, motivo }),
     disablePrintAnimation: !print,
   });
 }
