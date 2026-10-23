@@ -33,11 +33,27 @@ function tokenLifetimeMs(expiresInSeconds) {
  */
 const TRACEABILITY_MAX_LEN = 60;
 
+// La terminal vuelve a serializar el traceability al armar el webhook y se
+// atraganta con ciertos caracteres: el 15-oct-2026 un motivo con comillas,
+// "=" y acentos ("...cámara ausente (orderId=\"cabina-1_...") regresó como
+// JSON inválido (orderIdu003d"cabina-1_") y se perdió la confirmación de la
+// cancelación. Por eso los valores van solo en ASCII simple: sin acentos,
+// comillas, "=", barras ni paréntesis, y se recortan DESPUÉS de limpiar.
+function sanitizeTraceabilityValue(value) {
+  return String(value)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^A-Za-z0-9 _.,:-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, TRACEABILITY_MAX_LEN);
+}
+
 function buildTraceability(fields = {}) {
   const traceability = { cabina: config.netpay.boothId };
   for (const [key, value] of Object.entries(fields)) {
     if (value === undefined || value === null || value === '') continue;
-    traceability[key] = String(value).slice(0, TRACEABILITY_MAX_LEN);
+    traceability[key] = sanitizeTraceabilityValue(value);
   }
   return traceability;
 }

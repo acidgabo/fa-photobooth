@@ -53,6 +53,18 @@ const recheckDelayMs = () => ms('REVERSAL_RECHECK_DELAY_MS', 30000);
 // Separación entre reconsultas, para no encimar pushes a la terminal.
 const recheckSpacingMs = () => ms('REVERSAL_RECHECK_SPACING_MS', 5000);
 
+// Texto que va en traceability.motivo de cada reimpresión por folio. La
+// terminal lo regresa en la respuesta, así que en el JSON se ve de qué folio
+// es cada reimpresión y por qué se hizo (pendiente 4 de NetPay, 15-oct:
+// "validar si se está realizando la reimpresión del folio correcto").
+// Solo ASCII simple (ver sanitizeTraceabilityValue en netpayService).
+const MOTIVOS = {
+  declined: 'consulta venta declinada',
+  payment_timeout: 'consulta venta sin respuesta',
+  recheck: 'reconsulta tras venta aprobada',
+  manual: 'operador panel',
+};
+
 // folio -> { reason, detail, timer, done } — consultas enviadas esperando
 // webhook. `done` resuelve la promesa que regresa checkFolio() cuando la
 // consulta termina (respuesta, "no encontrada", timeout o falla al enviar).
@@ -152,7 +164,7 @@ function checkFolio(folio, reason, detail = '', { print = false } = {}) {
   // panel del operador lo usa para avisar de inmediato si no se pudo
   // enviar. Las consultas automáticas lo ignoran.
   finished.sent = netpayService
-    .reprintByFolio({ folioId: folio, print, motivo: reason === 'manual' ? 'operador panel' : undefined })
+    .reprintByFolio({ folioId: folio, print, motivo: MOTIVOS[reason] || reason })
     .then(() => {
       console.log(`[reversalService] consulta de estado enviada — folio=${folio} (motivo: ${reason}${print ? ', con ticket' : ''})`);
       return { ok: true };
