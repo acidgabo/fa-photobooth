@@ -207,6 +207,20 @@ async function manualCheck(folio, { print = false } = {}) {
   return checkFolio(folio, 'manual', '', { print }).sent;
 }
 
+/**
+ * La venta de un folio pendiente se resolvió por otro camino (p. ej. la
+ * venta aprobada llegó tarde y se canceló automáticamente): se cierra la
+ * consulta abierta, si la hay, y se quita de los pendientes, sin mandar nada
+ * a la terminal.
+ */
+function resolvePending(folio, why) {
+  if (!folio) return null;
+  finishInquiry(folio);
+  const entry = removePending(folio);
+  if (entry) console.log(`[reversalService] pendiente cerrado — folio=${folio} (${why})`);
+  return entry;
+}
+
 function openInquiries() {
   return [...inquiries.entries()].map(([folio, inquiry]) => ({ folio, reason: inquiry.reason }));
 }
@@ -275,6 +289,31 @@ function bumpChecks(folio) {
 // Respuesta de la terminal
 // ---------------------------------------------------------------------
 /**
+ * Deja la información del reverso en la sesión del kiosco para que la
+ * pantalla de error la muestre (voucher personalizado de reversos). Solo si
+ * la sesión activa es la de ese folio y está en error — una consulta tardía
+ * de una sesión anterior no debe pintarse sobre la venta de otro cliente.
+ */
+function showReversalOnKiosk(type, body) {
+  // Lazy require: sessionState.js también requiere este módulo.
+  const sessionState = require('../sessionState');
+  const current = sessionState.get();
+  if (current.orderId !== body.folioNumber || current.status !== 'error') return;
+  sessionState.set({
+    reversal: {
+      type,
+      message:
+        body.message ||
+        (type === 'RV' ? 'Transacción Reversada' : type === 'PRV' ? 'Transacción Pendiente por Reversar' : 'No se encontraron datos'),
+      folio: body.folioNumber,
+      amount: body.amount || null,
+      card: body.cardNumber || null,
+      at: new Date().toISOString(),
+    },
+  });
+}
+
+/**
  * Llamado por routes/webhook.js con cada respuesta de reimpresión
  * (isRePrint: true). Las reimpresiones hechas a mano (script de prueba)
  * que no correspondan a ninguna consulta ni pendiente solo se registran.
@@ -317,6 +356,7 @@ function handleReprintResponse(body) {
     case 'RV': {
       removePending(folio);
       console.log(`[reversalService] reverso CONFIRMADO — ${who}`);
+      showReversalOnKiosk('RV', body);
       notifyService.notifyReversalConfirmed(
         `${who} — el cobro autorizado se deshizo (${body.message || 'Transacción reversada'})` +
           (pendingEntry && pendingEntry.status === 'PRV' ? ' — estaba pendiente por reversar' : '')
@@ -332,6 +372,7 @@ function handleReprintResponse(body) {
         lastError: undefined,
       });
       console.warn(`[reversalService] venta PENDIENTE POR REVERSAR — ${who}`);
+      showReversalOnKiosk('PRV', body);
       if (isNew || (pendingEntry && pendingEntry.status !== 'PRV')) {
         notifyService.notifyReversalPending(
           `${who} — se reversa sola con la siguiente venta exitosa; se volverá a consultar entonces`
@@ -405,6 +446,7 @@ function handleNotFound(body) {
     `[reversalService] la terminal no tiene registro de la venta — folio=${folio} (motivo: ${origin}): ` +
       `nunca le llegó, sin cobro`
   );
+  showReversalOnKiosk('NF', { folioNumber: folio, message: body.message });
   if (pendingEntry) {
     // Ya habíamos avisado 🟠 por este folio — cerrar el pendiente en el canal.
     notifyService.notifyReversalNotFound(
@@ -461,6 +503,7 @@ module.exports = {
   getPending,
   manualCheck,
   openInquiries,
+  resolvePending,
   discardPending,
   // solo tests
   _runRecheck: runRecheck,

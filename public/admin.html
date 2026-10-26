@@ -396,7 +396,9 @@
                     </div>
                     <div class="actions">
                         <button ${dis} onclick="consult('${esc(t.folio)}', false)">Consultar</button>
-                        <button class="secondary" ${dis} onclick="consult('${esc(t.folio)}', true)">Reimprimir ticket</button>
+                        ${['RV', 'PRV'].includes(t.status.code)
+                            ? `<button class="secondary" ${dis} title="La terminal no imprime ticket de transacciones reversadas o pendientes por reversar; la respuesta (JSON) sí llega" onclick="consult('${esc(t.folio)}', true)">Reimprimir (sin ticket)</button>`
+                            : `<button class="secondary" ${dis} onclick="consult('${esc(t.folio)}', true)">Reimprimir ticket</button>`}
                     </div>
                     <button class="open" onclick="openDetail('${esc(t.folio)}')">Ver detalle y JSON</button>
                 </div>`;
@@ -523,6 +525,7 @@
                 </div>
                 ${voucher}
                 ${working ? '<p class="working">Esperando respuesta de la terminal…</p>' : ''}
+                ${reprint && ['RV', 'PRV'].includes(reprint.reprintModule) ? '<p class="sub" style="color:var(--muted);margin:0 0 8px">La terminal no imprime ticket de transacciones reversadas o pendientes por reversar ("Esta transacción ha sido reversada"). La respuesta sí llega: el voucher de arriba y el JSON son la evidencia.</p>' : ''}
                 <div class="actions" style="display:flex;flex-wrap:wrap;gap:8px;margin:6px 0 18px">
                     <button ${dis} onclick="consult('${esc(folio)}', false)">Consultar por folio</button>
                     <button class="secondary" ${dis} onclick="consult('${esc(folio)}', true)">Reimprimir ticket (folio)</button>

@@ -8,6 +8,7 @@ const dslrboothService = require('../services/dslrboothService');
 const directBoothService = require('../services/directBoothService');
 const windirectBoothService = require('../services/windirectBoothService');
 const windowFocusService = require('../services/windowFocusService');
+const { restoreKioskAfterFailure } = require('../services/kioskRestore');
 const { autoCancelSale, resolveCancelResult } = require('../services/autoCancelService');
 const reversalService = require('../services/reversalService');
 const netpayLog = require('../services/netpayLog');
@@ -186,6 +187,10 @@ router.post('/netpay', async (req, res) => {
     );
     logOrphanCharge(`APROBADA TARDE (cancelación automática) ${detail}`);
     autoCancelSale(terminalOrderId, 'venta aprobada tarde (el kiosco ya no la esperaba)', { folioNumber });
+    // El folio había quedado como pendiente "sin respuesta" (watchdog +
+    // consulta sin contestar). Ya se sabe qué pasó con él: llegó aprobado y
+    // se está cancelando, así que se quita de los pendientes del panel.
+    reversalService.resolvePending(folioNumber, 'llegó la venta aprobada tarde y se canceló');
     return res.status(200).json(NETPAY_ACK);
   }
 
@@ -229,7 +234,13 @@ router.post('/netpay', async (req, res) => {
 
   if (responseCode !== '00') {
     console.log(`[webhook] pago rechazado (folioNumber: ${folioNumber}, responseCode: ${responseCode}, message: ${netpayMessage})`);
-    sessionState.set({ status: 'error', error: netpayMessage || `responseCode ${responseCode}` });
+    sessionState.set({
+      status: 'error',
+      error: netpayMessage || `responseCode ${responseCode}`,
+      declinedCode: responseCode,
+      declinedMessage: netpayMessage || null,
+      reversal: null,
+    });
     // Una venta declinada puede esconder un reverso: el banco autorizó y
     // la comunicación se cortó (p.ej. "05 Error al leer tarjeta" → la
     // reimpresión confirmó "RV", 24-sep-2026). Se consulta el folio para
@@ -289,6 +300,9 @@ router.post('/netpay', async (req, res) => {
       // limpio para cancelar automáticamente (ver docs del proyecto).
       // Fire-and-forget: nunca debe tirar el manejo del webhook si falla.
       autoCancelSale(terminalOrderId, `dslrBooth: ${err.message}`, { folioNumber });
+      // Ya se le había quitado el lockscreen a LumaBooth y pasado el foco:
+      // regresarlos para que el cliente no se quede con LumaBooth en pantalla.
+      restoreKioskAfterFailure('falla al iniciar la sesion');
     }
   }
 

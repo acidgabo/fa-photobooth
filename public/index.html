@@ -473,7 +473,7 @@
             // por CUALQUIER camino (los botones de esa pantalla, o cualquier otra
             // transición) para que no dispare backToStart() a destiempo sobre una
             // sesión nueva que ya esté en curso.
-            if (screenNum !== 5) clearErrorAutoReturn();
+            if (screenNum !== 5) { clearErrorAutoReturn(); stopReversalFollowUp(); }
 
             // dots: el 5 (error) no tiene dot propio, se queda en el paso 3.
             // El 6 (fuera de servicio) tampoco tiene dot — no apaga ninguno.
@@ -694,6 +694,12 @@
         // pruebas, solo que por F5 en vez de por doble tap).
         function applyServerState(state) {
             if (state.status === 'error') {
+                // Reverso confirmado (RV) o pendiente (PRV): voucher
+                // personalizado en lugar del mensaje genérico de rechazo.
+                if (state.reversal) {
+                    showError(reversalHtml(state));
+                    return;
+                }
                 const errorMessages = {
                     payment_timeout: 'La terminal no respondió a tiempo.<br>Intenta de nuevo.',
                     card_declined:   'Pago rechazado.<br>Verifica tu tarjeta e intenta de nuevo.',
@@ -710,6 +716,14 @@
                         ? state.error
                         : 'No se pudo procesar el pago<br>verifica tu tarjeta e intenta de nuevo')
                 );
+                // Una venta declinada (o sin respuesta) puede esconder un
+                // reverso: el backend consulta el folio a la terminal y la
+                // respuesta tarda unos segundos. showError() detiene el
+                // polling, así que se sigue consultando un rato para
+                // mostrar el resultado cuando llegue.
+                if (state.declinedCode || state.error === 'payment_timeout') {
+                    startReversalFollowUp();
+                }
                 return;
             }
 
@@ -813,6 +827,95 @@
             const eventType = state.lastEvent && state.lastEvent.eventType;
             el.textContent = BOOTH_MESSAGES[eventType] || 'Iniciando sesión de fotos...';
             spinner.style.display = eventType === 'session_end' ? 'none' : '';
+        }
+
+        // --- Información de reverso en la pantalla de error --------------
+        // Voucher personalizado que pide NetPay para los casos de reverso:
+        // responseCode original + mensaje de error original + mensaje de la
+        // reimpresión (RV = "Transacción Reversada", PRV = "Transacción
+        // Pendiente por Reversar"). state.reversal lo arma reversalService.js.
+        const REVERSAL_FOLLOWUP_MS = 60000;  // igual que REVERSAL_INQUIRY_TIMEOUT_MS del backend
+        let reversalFollowUpTimer = null;
+
+        function escapeHtml(text) {
+            return String(text).replace(/[&<>"']/g, c => (
+                { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+            ));
+        }
+
+        function reversalHtml(state) {
+            const r = state.reversal;
+            let title, body;
+            if (r.type === 'PRV') {
+                title = 'Transacción pendiente por reversar';
+                body = 'Tu pago no se completó y está pendiente de reversarse.<br>' +
+                    'El cargo no debe aplicarse; se cancela en la siguiente operación de la terminal.<br>' +
+                    'Si lo ves reflejado, aclara con el folio de abajo.';
+            } else if (r.type === 'NF') {
+                // La terminal confirma que no tiene registro de la venta:
+                // el cobro nunca se autorizó (p.ej. tarjeta retirada antes
+                // de tiempo), así que no hubo cobro ni reverso que hacer.
+                // Se muestran tal cual el mensaje original de la venta y el
+                // de la consulta por folio, más la aclaración de que no hubo
+                // cobro (pedido en la junta del 15-oct).
+                const lines = [];
+                if (state.declinedMessage) lines.push(escapeHtml(state.declinedMessage));
+                lines.push(escapeHtml(r.message));
+                lines.push('No se realizó ningún cobro');
+                return lines.join('<br>');
+            } else {
+                title = 'Transacción reversada';
+                // NetPay pidió quitar la línea "Mantén tu tarjeta en la terminal
+                // hasta que termine y vuelve a intentarlo" (25-oct-2026).
+                body = 'No se realizó ningún cargo a tu tarjeta.';
+            }
+
+            const parts = [];
+            if (state.declinedCode) parts.push('Código ' + escapeHtml(state.declinedCode));
+            if (state.declinedMessage) parts.push(escapeHtml(state.declinedMessage));
+            parts.push(escapeHtml(r.message));
+
+            const extra = [];
+            if (r.amount) extra.push('Monto $' + escapeHtml(r.amount));
+            if (r.card) extra.push('Tarjeta ****' + escapeHtml(r.card));
+
+            return '<strong>' + title + '</strong><br>' + body +
+                '<br><small>' + parts.join(' · ') +
+                '<br>Folio: ' + escapeHtml(r.folio) +
+                (extra.length ? '<br>' + extra.join(' · ') : '') +
+                '</small>';
+        }
+
+        function startReversalFollowUp() {
+            stopReversalFollowUp();
+            const startedAt = Date.now();
+            reversalFollowUpTimer = setInterval(async () => {
+                if (currentScreen !== 5 || Date.now() - startedAt > REVERSAL_FOLLOWUP_MS) {
+                    stopReversalFollowUp();
+                    return;
+                }
+                let state;
+                try {
+                    state = await api('/api/session/status');
+                } catch (_) {
+                    return; // error de red pasajero
+                }
+                if (state.status !== 'error') {
+                    stopReversalFollowUp();
+                    return;
+                }
+                if (state.reversal) {
+                    stopReversalFollowUp();
+                    // showError reinicia el regreso automático al inicio: el
+                    // cliente tiene el tiempo completo para leer el voucher.
+                    showError(reversalHtml(state));
+                }
+            }, POLL_INTERVAL_MS);
+        }
+
+        function stopReversalFollowUp() {
+            if (reversalFollowUpTimer) clearInterval(reversalFollowUpTimer);
+            reversalFollowUpTimer = null;
         }
 
         // Cada llamador manda el mensaje ya completo (incluyendo el <br> con
